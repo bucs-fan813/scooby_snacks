@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Script Name: Packer Flush
 #
-# Author: john@pocdigital.org
+# Author: bucs-fan813@users.noreply.github.com
 # Date : 01/10/2024
 #
 # Description: Packer Flush removes all straggling resources created by packer (ec2 instances, AMIs, snapshots, security groups, key pairs). AWS free-tier

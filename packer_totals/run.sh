@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Script Name: Packer Totals
 #
-# Author: john@pocdigital.org
+# Author: bucs-fan813@users.noreply.github.com
 # Date : 01/10/2024
 #
-# Description: Packer Total estimates  (ec2 instances, AMIs, snapshots, security groups, key pairs). AWS free-tier
+# Description: Packer Total estimates the monthly cost for resources created by packer and compares Standard tier vs Archive tier for snapshots
 #               
 #
 # Run Information: root:/# ./run.sh
