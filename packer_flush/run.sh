@@ -7,7 +7,7 @@
 # Description: Packer Flush removes all straggling resources created by packer (ec2 instances, AMIs, snapshots, security groups, key pairs). AWS free-tier
 #               
 #
-# Run Information: root:/# ./run.sh
+# Run Information: ./packer_flush/run.sh
 
 # Set globals
 ACCOUNT_ID="${1:-self}"

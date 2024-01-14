@@ -7,7 +7,7 @@
 # Description: Packer Total estimates the monthly cost for resources created by packer and compares Standard tier vs Archive tier for snapshots
 #               
 #
-# Run Information: root:/# ./run.sh
+# Run Information: ./packer_totals/run.sh
 
 # Set globals
 ACCOUNT_ID="${1:-self}"
