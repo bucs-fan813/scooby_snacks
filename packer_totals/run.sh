@@ -35,7 +35,7 @@ function process_chunk() {
         # NOTE: Use printf to appear "more" interactive output
         printf "Processing ($counter of $length): \e[1m\e[37m$snapshot_id => "
         snapshot_bytes=$(get_snapshot_bytes $snapshot_id)
-        if [ $snapshot_bytes == false ]; then
+        if [ -z $snapshot_bytes ]; then
             echo -e "\e[31mskipped\e[0m"
         else
             echo -e "$snapshot_bytes bytes\e[0m"
@@ -102,10 +102,9 @@ else
     chunks=()
     let chunks_size=0
     let chunks_batch=1
-    for snapshot_id in "${snapshot_ids[@]}"; do
+    for snapshot_id in ${snapshot_ids[@]}; do
         chunks+=("$snapshot_id")
         chunks_size=$((chunks_size + 1))
-        echo $snapshot_id
         # If the chunk size reaches 1000, process the chunk
         if [ "${chunks_size}" -eq 1000 ]; then
             echo "Processing batch #${chunks_batch}..."
