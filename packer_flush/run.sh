@@ -28,12 +28,12 @@ echo -e "\e[1m\e[33mFound ${vpcs}\e[0m"
 
 # Flush instances
 printf "EC2s: "
-instance_ids=$(aws ec2 describe-instances --query 'Reservations[].Instances[].InstanceId' --output text)
+instance_ids=$(aws ec2 describe-instances --query 'Reservations[].Instances[?State.Name!=`terminated`].InstanceId' --output text)
 instances=$(echo $instance_ids | wc -w)
 echo -e "\e[1m\e[33mFound ${instances}\e[0m"
 
 if [ $instances -gt 0 ]; then
-    echo "Deleting EC2 instances"
+    echo "Deleting {${instances}} EC2 instances"
     aws ec2 terminate-instances --instance-ids ${instance_ids[@]}
 fi
 
@@ -44,7 +44,7 @@ amis=$(echo $ami_ids | wc -w)
 echo -e "\e[1m\e[33mFound ${amis}\e[0m"
 
 if [ $amis -gt 0 ]; then
-    echo "De-registering AMIs"
+    echo "De-registering {${amis}} AMIs"
     for ami_id in ${ami_ids[@]}; do aws ec2 deregister-image --image-id $ami_id; done
 fi
 
@@ -55,7 +55,7 @@ snapshots=$(echo $snapshot_ids | wc -w)
 echo -e "\e[1m\e[33mFound ${snapshots}\e[0m"
 
 if [ $snapshots -gt 0 ]; then
-    echo "Deleting snapshots"
+    echo "Deleting {${snapshots}} snapshots"
     for snapshot_id in ${snapshot_ids[@]}; do aws ec2 delete-snapshot --snapshot-id $snapshot_id; done
 fi
 
@@ -65,8 +65,16 @@ sg_ids=$(aws ec2 get-security-groups-for-vpc --vpc-id ${vpc_ids} --query 'Securi
 sgs=$(echo $sg_ids | wc -w)
 echo -e "\e[1m\e[33mFound ${sgs}\e[0m"
 
+# TODO: add deadman switch
+drain_count=$(aws ec2 describe-instance-status --query 'length(InstanceStatuses[].InstanceState[?Name!=`terminated`])')
+while [ $drain_count -gt 0 ]; do
+  echo "Waiting 10 seconds for (${drain_count}) instances to terminate..."
+  sleep 10
+  drain_count=$(aws ec2 describe-instance-status --query 'length(InstanceStatuses[].InstanceState[?Name!=`terminated`])')
+done
+
 if [ $sgs -gt 0 ]; then
-    echo "Deleting security groups"
+    echo "Deleting security {${sgs}} groups"
     for sg_id in ${sg_ids[@]}; do aws ec2 delete-security-group --group-id $sg_id; done
 fi
 
@@ -82,7 +90,7 @@ if [ $keypairs -gt 0 ]; then
 fi
 
 # TODO: port to python
-# TODO: Depemdency checker for awscli and locales-all (so we get pretty numbers)
+# TODO: Dependency checker for awscli and locales-all (so we get pretty numbers)
 # TODO: make args for --all (default), --ec2, --snapshots, --vpcs
 # TODO: handle non-default VPCs
 # TODO: usage()
