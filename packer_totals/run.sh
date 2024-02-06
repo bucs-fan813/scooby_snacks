@@ -32,6 +32,8 @@ function process_chunk() {
     for snapshot_id in "${chunk[@]}"; do
         # Process each snapshot as needed
         counter=$((counter + 1))
+        # echo "Processing Snapshot [${counter}/${length}] ${snapshot_id}"
+        # continue
         # NOTE: Use printf to appear "more" interactive output
         printf "Processing ($counter of $length): \e[1m\e[37m$snapshot_id => "
         snapshot_bytes=$(get_snapshot_bytes $snapshot_id)
@@ -88,7 +90,7 @@ fi
 
 ### DEBUG ###
 echo -e "Total Snapshots: \e[1m\e[37m$all_snapshots_total\e[0m"
-echo -e "AMI Snapshots: \e[1m\e[37m$ami_snapshots_total\e[0m"
+echo -e "AMI (only) Snapshots: \e[1m\e[37m$ami_snapshots_total\e[0m"
 
 # FIXME: Split the list of snapshots into chunks of 1000 to avoid `InvalidSnapshot.NotFound` errors?
 # If `MaxResults` parameter is not used, then the request returns all snapshots.
@@ -105,7 +107,7 @@ else
     for snapshot_id in ${snapshot_ids[@]}; do
         chunks+=("$snapshot_id")
         chunks_size=$((chunks_size + 1))
-        # If the chunk size reaches 1000, process the chunk
+        # If the chunk size reaches 1000 or there are no more items in the chunk, process the chunk
         if [ "${chunks_size}" -eq 1000 ]; then
             echo "Processing batch #${chunks_batch}..."
             volume_sizes=$(aws ec2 describe-snapshots --owner-ids "${ACCOUNT_ID}" --snapshot-ids "${chunks[@]}" --query 'Snapshots[].VolumeSize' --output text)
@@ -118,6 +120,8 @@ else
             chunks_batch=$((chunks_batch + 1))
         fi
     done
+    # Process the remaining chunk(s), if any
+    [[ ${#chunks[@]} -gt 0 ]] && process_chunk ${chunks[@]}
 fi
 
 # volume_total_size = The sum (in GB) of all volumes
