@@ -14,8 +14,22 @@ declare -r ASSUME_ROLE_NAME=SERVADMIN
 declare -A HAYSTACK
 declare -i TOTAL_COUNT TOTAL_SIZE
 
+# isAuthenticated Checks to see if valid AWS credentials are available
+function isAuthenticated {
+    [[ $(aws sts get-caller-identity > /dev/null 2>&1) -eq 0 ]] && echo true || echo false
+}
+
+# hasCluster Checks to see if kubectl is configured for a cluster
+function hasCluster {
+    [[ $(kubectl cluster-info > /dev/null 2>&1) -eq 0 ]] && echo true || echo false
+}
+
 # fetchPods Gets the list of namespaces and pod names
 function fetchPods {
+    # CLUSTER=$(kubectl config current-context | sed -E 's#.*\W(\w*)#\1#')
+    CLUSTER=$(kubectl config current-context)
+    echo -e "Fetching pods from: \e[1;32m${CLUSTER}\e[0m..."
+
     # Get the list of namespaces and pod names
     while read -r NAMESPACE POD; do
         # Ensure both namespace and pod values are non-empty
@@ -97,40 +111,48 @@ function fetchEbsVolumes {
     printf "Sub-total: %-8s volumes\t\t\t\t\t\t\t\t %d GB\n" "$count" "$total_size"
 }
 
+function main {
+    [[ $(isAuthenticated) == true ]] && echo -n "Credentials found! Connecting to cluster..." || (echo -e "\e[31No valid credentials[0m!"; exit 1)
+    [[ $(hasCluster) == true ]] && echo -e "\e[32mConnected\e[0m!" || (echo -e "\e[31mConnected\e[0m!"; exit 1)
+    fetchPods
+
+    for NEEDLE in "${!HAYSTACK[@]}"; do
+        echo -n "Assuming ${ASSUME_ROLE_NAME} for AWS Account: ${NEEDLE}... "
+        
+        CREDENTIALS=$(aws sts assume-role \
+            --role-arn "arn:aws-us-gov:iam::$NEEDLE:role/$ASSUME_ROLE_NAME" \
+            --role-session-name "VOL_CHECKUP" 2>/dev/null)
+        
+        if [[ -z "$CREDENTIALS" ]]; then
+            # echo -e "\e[31mFailed to assume role for account $NEEDLE\e[0m"
+            echo -e "\e[31mFailed!\e[0m"
+            unset HAYSTACK["$NEEDLE"]
+            continue
+        fi
+        
+        export AWS_ACCESS_KEY_ID=$(echo "$CREDENTIALS" | jq -r '.Credentials.AccessKeyId')
+        export AWS_SECRET_ACCESS_KEY=$(echo "$CREDENTIALS" | jq -r '.Credentials.SecretAccessKey')
+        export AWS_SESSION_TOKEN=$(echo "$CREDENTIALS" | jq -r '.Credentials.SessionToken')
+        
+        ACCOUNT_ALIAS=$(aws iam list-account-aliases --query 'AccountAliases[0]' --output text 2>/dev/null | awk '{print toupper($0)}')
+        
+        if [[ -z "$ACCOUNT_ALIAS" || "$ACCOUNT_ALIAS" == "None" ]]; then
+            ACCOUNT_ALIAS="UNKNOWN"
+        fi
+        
+        # FIXME: HAYSTACK["$NEEDLE"] will be the pod name I overwrite it. Do I need to check to see if the pod name matches the alias?
+        HAYSTACK["$NEEDLE"]="$ACCOUNT_ALIAS"
+        echo -e "\e[32mSuccess\e[0m, Account Alias: ${ACCOUNT_ALIAS}"
+        
+        fetchEbsVolumes "$NEEDLE"
+        
+        # Clear AWS credentials to avoid contamination
+        unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+    done
+
+    printf "%*s\n" "$COLUMNS" "" | tr " " "="
+    printf "Number of Accounts: %d\t\t\t Number of EBS Volumes: %d \t\t\t Total Size: %d GB\n" "${#HAYSTACK[@]}" "$TOTAL_COUNT" "$TOTAL_SIZE"
+}
+
 # Entry Point
-fetchPods
-
-for NEEDLE in "${!HAYSTACK[@]}"; do
-    echo -n "Assuming role for AWS Account: ${NEEDLE}... "
-    
-    CREDENTIALS=$(aws sts assume-role \
-        --role-arn "arn:aws-us-gov:iam::$NEEDLE:role/$ASSUME_ROLE_NAME" \
-        --role-session-name "VOL_CHECKUP" 2>/dev/null)
-    
-    if [[ -z "$CREDENTIALS" ]]; then
-        echo -e "\e[31mFailed to assume role for account $NEEDLE\e[0m"
-        unset HAYSTACK["$NEEDLE"]
-        continue
-    fi
-    
-    export AWS_ACCESS_KEY_ID=$(echo "$CREDENTIALS" | jq -r '.Credentials.AccessKeyId')
-    export AWS_SECRET_ACCESS_KEY=$(echo "$CREDENTIALS" | jq -r '.Credentials.SecretAccessKey')
-    export AWS_SESSION_TOKEN=$(echo "$CREDENTIALS" | jq -r '.Credentials.SessionToken')
-    
-    ACCOUNT_ALIAS=$(aws iam list-account-aliases --query 'AccountAliases[0]' --output text 2>/dev/null | awk '{print toupper($0)}')
-    
-    if [[ -z "$ACCOUNT_ALIAS" || "$ACCOUNT_ALIAS" == "None" ]]; then
-        ACCOUNT_ALIAS="UNKNOWN"
-    fi
-    
-    HAYSTACK["$NEEDLE"]="$ACCOUNT_ALIAS"
-    echo -e "\e[32mSuccess\e[0m, Account Alias: ${ACCOUNT_ALIAS}"
-    
-    fetchEbsVolumes "$NEEDLE"
-    
-    # Clear AWS credentials to avoid contamination
-    unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
-done
-
-printf "%*s\n" "$COLUMNS" "" | tr " " "="
-printf "Number of Accounts: %d\t\t Number of EBS Volumes: %d \t\t\t\t\t\t\t\t Total Size: %d GB\n" "${#HAYSTACK[@]}" "$TOTAL_COUNT" "$TOTAL_SIZE"
+main
