@@ -9,11 +9,12 @@
 #
 # Run Information: ./ebs_wrangler/run.sh
 
-# Dictionary/Assoiative Array to track unique AWS accounts
+# Declare globals
 declare -r ASSUME_ROLE_NAME=SERVADMIN
 declare -A HAYSTACK
 declare -i TOTAL_COUNT TOTAL_SIZE
 
+# fetchPods Gets the list of namespaces and pod names
 function fetchPods {
     # Get the list of namespaces and pod names
     while read -r NAMESPACE POD; do
@@ -55,14 +56,17 @@ function fetchPods {
         fi
     # NOTE: Don't use piping or subshells with while loop
     done < <(kubectl get pods -A --no-headers -o custom-columns="Namespace:metadata.namespace,Pod:metadata.name")
-
+    printf "%*s\n" "$COLUMNS" "" | tr " " "="
     echo -e "${#HAYSTACK[@]} AWS Accounts found: [${!HAYSTACK[@]}]"
+    printf "%*s\n" "$COLUMNS" "" | tr " " "="
 }
 
+# fetchEbsVolumes gets the EBS volume data for the account
 function fetchEbsVolumes {
     local ACCOUNT=$1
-    # Fetch JSON data from AWS CLI
-    json_data=$(aws ec2 describe-volumes --query 'sort_by(Volumes[?State==`available`],&CreateTime)[].[VolumeId,State,VolumeType,AvailabilityZone,CreateTime,Size]' --output json)
+    # Fetch unused EBS Volumes in JSON format
+    # json_data=$(aws ec2 describe-volumes --query 'sort_by(Volumes[?State==`available`],&CreateTime)[].[VolumeId,State,VolumeType,AvailabilityZone,CreateTime,Size]' --output json)
+    json_data=$(aws ec2 describe-volumes --filters "Name=status,Values=available" --query 'sort_by(Volumes[?!not_null(Tags[?Key==`ebs.csi.aws.com/cluster`].Value)],&CreateTime)[].[VolumeId,State,VolumeType,AvailabilityZone,CreateTime,Size]' --output json)
 
     # Check if JSON data is empty
     if [[ -z "$json_data" || "$json_data" == "[]" ]]; then
@@ -90,21 +94,22 @@ function fetchEbsVolumes {
     TOTAL_COUNT+=$count
     TOTAL_SIZE+=$total_size
     echo "-----------------------------------------------------------------------------------------------"
-    printf "Total: %-8s volumes\t\t\t\t\t\t\t\t %d GB\n" "$count" "$total_size"
+    printf "Sub-total: %-8s volumes\t\t\t\t\t\t\t\t %d GB\n" "$count" "$total_size"
 }
 
+# Entry Point
 fetchPods
 
-for ACCOUNT in "${!HAYSTACK[@]}"; do
-    echo -n "Assuming role for AWS Account: ${ACCOUNT}... "
+for NEEDLE in "${!HAYSTACK[@]}"; do
+    echo -n "Assuming role for AWS Account: ${NEEDLE}... "
     
     CREDENTIALS=$(aws sts assume-role \
-        --role-arn "arn:aws-us-gov:iam::$ACCOUNT:role/$ASSUME_ROLE_NAME" \
+        --role-arn "arn:aws-us-gov:iam::$NEEDLE:role/$ASSUME_ROLE_NAME" \
         --role-session-name "VOL_CHECKUP" 2>/dev/null)
     
     if [[ -z "$CREDENTIALS" ]]; then
-        echo -e "\e[31mFailed to assume role for account $ACCOUNT\e[0m"
-        unset HAYSTACK["$ACCOUNT"]
+        echo -e "\e[31mFailed to assume role for account $NEEDLE\e[0m"
+        unset HAYSTACK["$NEEDLE"]
         continue
     fi
     
@@ -118,13 +123,14 @@ for ACCOUNT in "${!HAYSTACK[@]}"; do
         ACCOUNT_ALIAS="UNKNOWN"
     fi
     
-    HAYSTACK["$ACCOUNT"]="$ACCOUNT_ALIAS"
+    HAYSTACK["$NEEDLE"]="$ACCOUNT_ALIAS"
     echo -e "\e[32mSuccess\e[0m, Account Alias: ${ACCOUNT_ALIAS}"
     
-    fetchEbsVolumes "$ACCOUNT"
+    fetchEbsVolumes "$NEEDLE"
     
     # Clear AWS credentials to avoid contamination
     unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
 done
 
-printf "Aggregate Total: %-8s AWS Accounts with %-8s volumes\t\t\t\t\t\t\t\t %d GB\n" "${#HAYSTACK[@]}" "$TOTAL_COUNT" "$TOTAL_SIZE"
+printf "%*s\n" "$COLUMNS" "" | tr " " "="
+printf "Number of Accounts: %d\t\t Number of EBS Volumes: %d \t\t\t\t\t\t\t\t Total Size: %d GB\n" "${#HAYSTACK[@]}" "$TOTAL_COUNT" "$TOTAL_SIZE"
