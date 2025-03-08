@@ -12,24 +12,36 @@
 # Declare globals
 declare -r ASSUME_ROLE_NAME=SERVADMIN
 declare -A HAYSTACK
-declare -i TOTAL_COUNT TOTAL_SIZE
+declare -i TOTAL_COUNT TOTAL_SIZE TOTAL_COST
+declare hasResults=false
 
 # isAuthenticated Checks to see if valid AWS credentials are available
 function isAuthenticated {
-    [[ $(aws sts get-caller-identity > /dev/null 2>&1) -eq 0 ]] && echo true || echo false
+    aws sts get-caller-identity > /dev/null 2>&1 && echo true || echo false
 }
 
 # hasCluster Checks to see if kubectl is configured for a cluster
 function hasCluster {
-    [[ $(kubectl cluster-info > /dev/null 2>&1) -eq 0 ]] && echo true || echo false
+    kubectl cluster-info > /dev/null 2>&1 && echo true || echo false
+}
+
+spinner() {
+    [[ $hasResults == true ]] && return
+	i=$1
+	sp="-\|/"
+    # NOTE: https://unix.stackexchange.com/questions/225179/display-spinner-while-waiting-for-some-process-to-finish
+	printf "\b${sp:i++%${#sp}:1}"
+    # sleep 0.1
 }
 
 # fetchPods Gets the list of namespaces and pod names
 function fetchPods {
-    # CLUSTER=$(kubectl config current-context | sed -E 's#.*\W(\w*)#\1#')
-    CLUSTER=$(kubectl config current-context)
-    echo -e "Fetching pods from: \e[1;32m${CLUSTER}\e[0m..."
+    printf '\e[?25l'
+    CLUSTER_ARN=$(kubectl config current-context)
+    CLUSTER_NAME=$(sed -E 's#.*\W(\w*)#\1#' <<< "${CLUSTER_ARN}")
+    echo -e "Fetching pods from: \e[34m${CLUSTER_NAME} (${CLUSTER_ARN})\e[0m..."
 
+    let i=0
     # Get the list of namespaces and pod names
     while read -r NAMESPACE POD; do
         # Ensure both namespace and pod values are non-empty
@@ -40,6 +52,7 @@ function fetchPods {
             # Check if `printenv` succeeded
             if [[ -z "$ENVS" ]]; then
                 # echo "Skipping pod $POD in namespace $NAMESPACE (failed to retrieve env vars)"
+                spinner $i
                 continue
             fi
             # Extract ACCOUNT from either `ACCOUNT` or `AWS_ROLE_ARN`
@@ -50,6 +63,7 @@ function fetchPods {
                 if [[ -n "$AWS_ROLE_ARN" ]]; then
                     AWS_ACCOUNT=$(echo "$AWS_ROLE_ARN" | sed -E 's/.*:([0-9]{12}):.*/\1/')
                 else
+                    spinner $i
                     continue
                 fi
             fi
@@ -64,7 +78,8 @@ function fetchPods {
                 continue
             fi
 
-            # Store valid accounts
+            # Store valid accounts (and add a new line from the spinner!)
+            [[ $hasResults == false ]] && { hasResults=true; echo ""; }
             HAYSTACK["$AWS_ACCOUNT"]="$POD"
             echo -e "Added: \e[32m$AWS_ACCOUNT\e[0m, Namespace: $NAMESPACE, Pod: $POD"
         fi
@@ -73,6 +88,7 @@ function fetchPods {
     printf "%*s\n" "$COLUMNS" "" | tr " " "="
     echo -e "${#HAYSTACK[@]} AWS Accounts found: [${!HAYSTACK[@]}]"
     printf "%*s\n" "$COLUMNS" "" | tr " " "="
+    printf '\e[?25h'
 }
 
 # fetchEbsVolumes gets the EBS volume data for the account
@@ -107,13 +123,16 @@ function fetchEbsVolumes {
     # Print summation row
     TOTAL_COUNT+=$count
     TOTAL_SIZE+=$total_size
+    cost=$(awk "BEGIN {print $total_size * 0.1"})
+    TOTAL_COST+=$cost
     echo "-----------------------------------------------------------------------------------------------"
-    printf "Sub-total: %-8s volumes\t\t\t\t\t\t\t\t %d GB\n" "$count" "$total_size"
+    printf "Sub-total: %-8s volumes\t\t\t\t\t\t %d GB\t\tCost: \$%d/month\n" "$count" "$total_size" "$cost"
 }
 
 function main {
-    [[ $(isAuthenticated) == true ]] && echo -n "Credentials found! Connecting to cluster..." || (echo -e "\e[31No valid credentials[0m!"; exit 1)
-    [[ $(hasCluster) == true ]] && echo -e "\e[32mConnected\e[0m!" || (echo -e "\e[31mConnected\e[0m!"; exit 1)
+    [[ $(isAuthenticated) == true ]] && echo -en "\e[32mCredentials found!\e[0m Connecting to cluster..." || { echo -e "\e[31mNo valid credentials!\e[0m"; exit 1; }
+    [[ $(hasCluster) == true ]] && echo -e "\e[32mConnected!\e[0m" || { echo -e "\e[31mFailed!\e[0m"; exit 1; }
+
     fetchPods
 
     for NEEDLE in "${!HAYSTACK[@]}"; do
@@ -151,7 +170,7 @@ function main {
     done
 
     printf "%*s\n" "$COLUMNS" "" | tr " " "="
-    printf "Number of Accounts: %d\t\t\t Number of EBS Volumes: %d \t\t\t Total Size: %d GB\n" "${#HAYSTACK[@]}" "$TOTAL_COUNT" "$TOTAL_SIZE"
+    printf "Number of Accounts: %d\t\t\t Number of EBS Volumes: %d \t\t\t Total Size: %d GB \t\t\t Total Cost: \$%d/month\n" "${#HAYSTACK[@]}" "$TOTAL_COUNT" "$TOTAL_SIZE" "$TOTAL_COST"
 }
 
 # Entry Point
