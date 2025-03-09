@@ -22,6 +22,9 @@ RED='\e[31m'
 GREEN='\e[32m'
 YELLOW='\e[33m'
 BLUE='\e[34m'
+GRAY='\e[90m'
+WHITE='\e[97m'
+BOLD='\e[1m'
 NC='\e[0m' # No Color
 
 function usage {
@@ -60,6 +63,7 @@ function hasKubeconfig {
 
 # hasSSHConnection Checks to see if there is an SSH connnection ESTABLISHED
 function hasSSHConnection {
+    # Make sure netstat is available
     if [ ! -x "$(command -v netstat 2>/dev/null)" ]; then
         # Retrieve `/etc/os-release` information for OS using `source`
         [[ -f /etc/os-release ]] && source /etc/os-release
@@ -68,19 +72,20 @@ function hasSSHConnection {
         elif [ "${ID_LIKE}" == "debian" ]; then
             apt install -yqqq netstat-nat
         else
-            echo "Uhh ohh, netstat is broken! Exiting!!"
+            echo "Uhh ohh, netstat is weak! Do you even lift bro!?!"
             exit 1
         fi
     fi
     local LOCAL_ADDRESS=$(ip addr | awk '/inet / {print $2}' | grep '^10\.' | cut -d'/' -f1 | tail -n 1)
-    local NETSTAT=$(netstat -tnp4 | grep $LOCAL_ADDRESS)
+    local NETSTAT=$(netstat -tnp4 | grep -E ".*${LOCAL_ADDRESS}.*ESTABLISHED.*ssh\s*$")
+    [[ ! -n $NETSTAT ]] && { echo false; exit 1; }
     local PROTO=$(awk '{ print $1 }' <<< $NETSTAT)
     local SSH_SERVER_ADDRESS=$(awk '{ print $5 }' <<< $NETSTAT | cut -d ":" -f1)
     local SSH_SERVER_PORT=$(awk '{ print $5 }' <<< $NETSTAT | cut -d ":" -f2)
     local STATUS=$(awk '{ print $6 }' <<< $NETSTAT)
     local PROCESS=$(awk '{ print $7 }' <<< $NETSTAT)
-    [[ ! -n $NETSTAT ]] && { echo false; exit 1; }
     local SSH_SERVER_FQDN=$(getent hosts $SSH_SERVER_ADDRESS | tr -s ' ' | cut -d " " -f2) 
+    # Only show for --debug
     echo "SSH connection ${STATUS} to ${SSH_SERVER_ADDRESS} (${SSH_SERVER_FQDN}) on ${PROTO}/${SSH_SERVER_PORT}" > /dev/null 2>&1
     echo true
 }
@@ -89,12 +94,13 @@ function hasSSHConnection {
 # TODO: Is there a way to correlate the listening and established connections to make sure we have the correct tunnel?
 function hasSSHTunnel {
     local NETSTAT=$(netstat -tlnp4 | grep -E '.*ssh\s*$')
+    [[ ! -n $NETSTAT ]] && { echo false; exit 1; }
     local PROTO=$(awk '{ print $1 }' <<< $NETSTAT)
     local SSH_TUNNEL_ADDRESS=$(awk '{ print $4 }' <<< $NETSTAT | cut -d ":" -f1)
     local SSH_TUNNEL_PORT=$(awk '{ print $4 }' <<< $NETSTAT | cut -d ":" -f2)
     local STATUS=$(awk '{ print $6 }' <<< $NETSTAT)
     local PROCESS=$(awk '{ print $7 }' <<< $NETSTAT)
-    [[ ! -n $NETSTAT ]] && { echo false; exit 1; }
+    # Only show for --debug
     echo "SSH connection ${STATUS} to ${SSH_SERVER_ADDRESS} on ${PROTO}/${SSH_SERVER_PORT}" > /dev/null 2>&1
     echo true
 }
@@ -109,8 +115,8 @@ function hasVPNConnection {
 # Cause why not!?!
 spinner() {
     [[ $hasResults == true ]] && return
-	i=$1
-	sp="◐◓◑◒"
+	local i=$1
+	local sp="◐◓◑◒"
     # NOTE: https://unix.stackexchange.com/questions/225179/display-spinner-while-waiting-for-some-process-to-finish
 	printf "\b${sp:i++%${#sp}:1}"
     # sleep 0.1
@@ -119,9 +125,9 @@ spinner() {
 # fetchPods Gets the list of namespaces and pod names
 function fetchPods {
     printf $CURSOR_OFF
-    CLUSTER_ARN=$(kubectl config current-context)
-    CLUSTER_NAME=$(sed -E 's#.*\W(\w*)#\1#' <<< "${CLUSTER_ARN}")
-    echo -e "Fetching pods from: ${BLUE}${CLUSTER_NAME} (${CLUSTER_ARN})${NC}..."
+    local CLUSTER_ARN=$(kubectl config current-context)
+    local CLUSTER_NAME=$(sed -E 's#.*\W(\w*)#\1#' <<< "${CLUSTER_ARN}")
+    echo -e "Fetching pods from: ${BLUE}${BOLD}${CLUSTER_NAME}${NC} ${GRAY}(${CLUSTER_ARN})${NC}..."
 
     let i=0
     # Get the list of namespaces and pod names
@@ -129,7 +135,7 @@ function fetchPods {
         # Ensure both namespace and pod values are non-empty
         if [[ -n "$NAMESPACE" && -n "$POD" ]]; then
             # Retrieve environment variables from the pod
-            ENVS=$(kubectl exec -n "$NAMESPACE" "$POD" -- printenv 2>/dev/null)
+            local ENVS=$(kubectl exec -n "$NAMESPACE" "$POD" -- printenv 2>/dev/null)
 
             # Check if `printenv` succeeded
             if [[ -z "$ENVS" ]]; then
@@ -177,7 +183,7 @@ function fetchPods {
 function fetchEbsVolumes {
     local ACCOUNT=$1
     # Fetch unused EBS Volumes in JSON format
-    json_data=$(aws ec2 describe-volumes --query 'sort_by(Volumes[?State==`available`],&CreateTime)[].[VolumeId,State,VolumeType,AvailabilityZone,CreateTime,Size]' --output json)
+    local json_data=$(aws ec2 describe-volumes --query 'sort_by(Volumes[?State==`available`],&CreateTime)[].[VolumeId,State,VolumeType,AvailabilityZone,CreateTime,Size]' --output json)
     # json_data=$(aws ec2 describe-volumes --filters "Name=status,Values=available" --query 'sort_by(Volumes[?!not_null(Tags[?Key==`ebs.csi.aws.com/cluster`].Value)],&CreateTime)[].[VolumeId,State,VolumeType,AvailabilityZone,CreateTime,Size]' --output json)
 
     # Check if JSON data is empty
@@ -187,7 +193,7 @@ function fetchEbsVolumes {
     fi
 
     # Get the count of volumes
-    count=$(jq 'length' <<< "$json_data")
+    local count=$(jq 'length' <<< "$json_data")
 
     # Print table headers
     echo -e "Volume ID\tState\t\tType\t\tAvailability Zone\tCreate Time\t\tSize (GB)"
@@ -214,19 +220,25 @@ function fetchEbsVolumes {
 
 function checkPrerequisites {
 
-    [[ $(isAuthenticated) == true ]] && echo -e "${GREEN}AWS credentials found!${NC}" || { echo -e "${RED}No valid AWS credentials!${NC} (Check ~/.aws/credentials)"; exit 1; }
-    [[ $(hasKubeconfig) == true ]] && echo -e "${GREEN}Kubeconfig found!${NC}" || { echo -e "${RED}Kubeconfig Failed!${NC} Check ~/.kube/config"; exit 1; }
-    [[ $(hasVPNConnection) == true ]] && echo -e "${GREEN}VPN connection established! (or bypassed)${NC}" || { echo -e "${RED}No VPN connection detected!${NC}"; }
-    [[ $(hasSSHConnection) == true ]] && echo -e "${GREEN}SSH Jumbbox connection established!${NC}" || { echo -e "${RED}No SSH Jumbox detected!${NC}"; exit 1; }
-    [[ $(hasSSHTunnel) == true ]] && echo -e "${GREEN}SSH Tunnel found!${NC}" || { echo -e "${RED}No tunnel detected!${NC}"; }
-    [[ $(hasCluster) == true ]] && echo -e "${GREEN}Connected!${NC}" || { echo -e "${RED}Failed!${NC}\nCheck ~/.kube/config"; exit 1; }
+    echo -n "AWS credentials check: "
+    [[ $(isAuthenticated) == true ]] && echo -e "${GREEN}Passed!${NC}" || { echo -e "${RED}Failed! ${GRAY}(Check ~/.aws/credentials)${NC} "; exit 1; }
+    echo -n "Kubeconfig check: "
+    [[ $(hasKubeconfig) == true ]] && echo -e "${GREEN}Passed!${NC}" || { echo -e "${RED}Failed! ${GRAY}(Check ~/.kube/config)${NC}"; exit 1; }
+    echo -n "VPN Connection check: "
+    [[ $(hasVPNConnection) == true ]] && echo -e "${GREEN}Passed! ${GRAY}(or skipped)${NC}" || { echo -e "${YELLOW}Skipped${NC}"; }
+    echo -n "Jumpbox Connection check: "
+    [[ $(hasSSHConnection) == true ]] && echo -e "${GREEN}Passed!${NC}" || { echo -e "${YELLOW}Skipped${NC}"; }
+    echo -n "SSH tunnel check: "
+    [[ $(hasSSHTunnel) == true ]] && echo -e "${GREEN}Passed!${NC}" || { echo -e "${YELLOW}Skipped${NC}"; }
+    echo -n "kubectl commands check: "
+    [[ $(hasCluster) == true ]] && echo -e "${GREEN}Passed!${NC}" || { echo -e "${RED}Houston we have a problem! ${GRAY}(Are you sure your connections are setup correctly?)${NC}"; exit 1; }
 }
 
 function generateReport {
     for NEEDLE in "${!HAYSTACK[@]}"; do
-        echo -n "Assuming ${ASSUME_ROLE_NAME} for AWS Account: ${NEEDLE}... "
+        echo -en "Assuming ${WHITE}${BOLD}${ASSUME_ROLE_NAME}${NC} for AWS Account: ${BLUE}${NEEDLE}... "
         
-        CREDENTIALS=$(aws sts assume-role \
+        local CREDENTIALS=$(aws sts assume-role \
             --role-arn "arn:aws-us-gov:iam::$NEEDLE:role/$ASSUME_ROLE_NAME" \
             --role-session-name "VOL_CHECKUP" 2>/dev/null)
         
@@ -241,7 +253,7 @@ function generateReport {
         export AWS_SECRET_ACCESS_KEY=$(echo "$CREDENTIALS" | jq -r '.Credentials.SecretAccessKey')
         export AWS_SESSION_TOKEN=$(echo "$CREDENTIALS" | jq -r '.Credentials.SessionToken')
         
-        ACCOUNT_ALIAS=$(aws iam list-account-aliases --query 'AccountAliases[0]' --output text 2>/dev/null | awk '{print toupper($0)}')
+        local ACCOUNT_ALIAS=$(aws iam list-account-aliases --query 'AccountAliases[0]' --output text 2>/dev/null | awk '{print toupper($0)}')
         
         if [[ -z "$ACCOUNT_ALIAS" || "$ACCOUNT_ALIAS" == "None" ]]; then
             ACCOUNT_ALIAS="UNKNOWN"
@@ -258,7 +270,7 @@ function generateReport {
     done
 
     printf "%*s\n" "$COLUMNS" "" | tr " " "="
-    printf "Number of Accounts: %d\t\t\t Number of EBS Volumes: %d \t\t\t Total Size: %d GB \t\t\t Total Cost: \$%d/month (@\$0.10/GB)\n" "${#HAYSTACK[@]}" "$TOTAL_COUNT" "$TOTAL_SIZE" "$TOTAL_COST"
+    printf "${WHITE}${BOLD}Number of Accounts:${NC} %d\t\t\t ${WHITE}${BOLD}Number of EBS Volumes:${NC} %d \t\t\t ${WHITE}${BOLD}Total Size:${NC} %d GB \t\t\t ${WHITE}${BOLD}Total Cost:${NC} \$%d/month ${GRAY}(@ \$0.10/GB)${NC}\n" "${#HAYSTACK[@]}" "$TOTAL_COUNT" "$TOTAL_SIZE" "$TOTAL_COST"
 }
 
 
