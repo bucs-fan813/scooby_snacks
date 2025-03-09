@@ -8,27 +8,77 @@
 #               
 #
 # Run Information: ./ebs_wrangler/run.sh
-
+# set -x
 # Declare globals
 declare -r ASSUME_ROLE_NAME=SERVADMIN
 declare -A HAYSTACK
 declare -i TOTAL_COUNT TOTAL_SIZE TOTAL_COST
 declare hasResults=false
 
+# Magic Spells
+CURSOR_OFF='\e[?25l'
+CURSOR_ON='\e[?25h'
+RED='\e[31m'
+GREEN='\e[32m'
+YELLOW='\e[33m'
+BLUE='\e[34m'
+NC='\e[0m'
+
 # isAuthenticated Checks to see if valid AWS credentials are available
 function isAuthenticated {
     aws sts get-caller-identity > /dev/null 2>&1 && echo true || echo false
 }
 
-# hasCluster Checks to see if kubectl is configured for a cluster
+# hasCluster Checks to see if K8S cluster is available
 function hasCluster {
     kubectl cluster-info > /dev/null 2>&1 && echo true || echo false
 }
 
+# hasKubeconfig Checks to see if kubectl is configured
+function hasKubeconfig {
+    kubectl config view > /dev/null 2>&1 && echo true || echo false
+}
+
+# hasSSHConnection Checks to see if there is an SSH connnection ESTABLISHED
+function hasSSHConnection {
+    local NETSTAT=$(netstat -tnp4 | grep -E '.*ssh\s*$')
+    local PROTO=$(awk '{ print $1 }' <<< $NETSTAT)
+    local SSH_SERVER_ADDRESS=$(awk '{ print $5 }' <<< $NETSTAT | cut -d ":" -f1)
+    local SSH_SERVER_PORT=$(awk '{ print $5 }' <<< $NETSTAT | cut -d ":" -f2)
+    local STATUS=$(awk '{ print $6 }' <<< $NETSTAT)
+    local PROCESS=$(awk '{ print $7 }' <<< $NETSTAT)
+    [[ ! -n $NETSTAT ]] && { echo false; exit 1; }
+    local SSH_SERVER_FQDN=$(getent hosts $SSH_SERVER_ADDRESS | tr -s ' ' | cut -d " " -f2) 
+    echo "SSH connection ${STATUS} to ${SSH_SERVER_ADDRESS} (${SSH_SERVER_FQDN}) on ${PROTO}/${SSH_SERVER_PORT}" > /dev/null 2>&1
+    echo true
+}
+
+# hasSSHTunnel Checks to see if there is an SSH connnection LISTENing
+# TODO: Is there a way to correlate the listening and established connections to make sure we have the correct tunnel?
+function hasSSHTunnel {
+    local NETSTAT=$(netstat -tlnp4 | grep -E '.*ssh\s*$')
+    local PROTO=$(awk '{ print $1 }' <<< $NETSTAT)
+    local SSH_TUNNEL_ADDRESS=$(awk '{ print $4 }' <<< $NETSTAT | cut -d ":" -f1)
+    local SSH_TUNNEL_PORT=$(awk '{ print $4 }' <<< $NETSTAT | cut -d ":" -f2)
+    local STATUS=$(awk '{ print $6 }' <<< $NETSTAT)
+    local PROCESS=$(awk '{ print $7 }' <<< $NETSTAT)
+    [[ ! -n $NETSTAT ]] && { echo false; exit 1; }
+    echo "SSH connection ${STATUS} to ${SSH_SERVER_ADDRESS} on ${PROTO}/${SSH_SERVER_PORT}" > /dev/null 2>&1
+    echo true
+}
+
+# hasVPNConnection Checks to see if there is connectivity to the ingress point (should work w/ or w/o a VPN connection)
+function hasVPNConnection {
+    local HOST_NAME=${1:-'ingress-live-black-aec2dda42feecce6.elb.us-gov-west-1.amazonaws.com'}
+    local HOST_PORT=${2:-'22'}
+    timeout 0.5s bash -c "echo -n 2>/dev/null < /dev/tcp/${HOST_NAME}/${HOST_PORT}" && echo true || echo false
+}
+
+# Cause why not!?!
 spinner() {
     [[ $hasResults == true ]] && return
 	i=$1
-	sp="-\|/"
+	sp="◐◓◑◒"
     # NOTE: https://unix.stackexchange.com/questions/225179/display-spinner-while-waiting-for-some-process-to-finish
 	printf "\b${sp:i++%${#sp}:1}"
     # sleep 0.1
@@ -36,10 +86,10 @@ spinner() {
 
 # fetchPods Gets the list of namespaces and pod names
 function fetchPods {
-    printf '\e[?25l'
+    printf $CURSOR_OFF
     CLUSTER_ARN=$(kubectl config current-context)
     CLUSTER_NAME=$(sed -E 's#.*\W(\w*)#\1#' <<< "${CLUSTER_ARN}")
-    echo -e "Fetching pods from: \e[34m${CLUSTER_NAME} (${CLUSTER_ARN})\e[0m..."
+    echo -e "Fetching pods from: ${BLUE}${CLUSTER_NAME} (${CLUSTER_ARN})${NC}..."
 
     let i=0
     # Get the list of namespaces and pod names
@@ -70,33 +120,33 @@ function fetchPods {
 
             # Validate ACCOUNT format
             if ! [[ "$AWS_ACCOUNT" =~ ^[0-9]{12}$ ]]; then
-                echo -e "Invalid: \e[31m$AWS_ACCOUNT\e[0m, Namespace: $NAMESPACE, Pod: $POD"
+                echo -e "Invalid: ${RED}$AWS_ACCOUNT${NC}, Namespace: $NAMESPACE, Pod: $POD"
                 continue
             # Check for duplicates
             elif [[ -n "${HAYSTACK[$AWS_ACCOUNT]}" ]]; then
-                echo -e "Duplicate: \e[33m$AWS_ACCOUNT\e[0m, Namespace: $NAMESPACE, Pod: $POD"
+                echo -e "Duplicate: ${YELLOW}$AWS_ACCOUNT${NC}, Namespace: $NAMESPACE, Pod: $POD"
                 continue
             fi
 
             # Store valid accounts (and add a new line from the spinner!)
             [[ $hasResults == false ]] && { hasResults=true; echo ""; }
             HAYSTACK["$AWS_ACCOUNT"]="$POD"
-            echo -e "Added: \e[32m$AWS_ACCOUNT\e[0m, Namespace: $NAMESPACE, Pod: $POD"
+            echo -e "Added: ${GREEN}$AWS_ACCOUNT${NC}, Namespace: $NAMESPACE, Pod: $POD"
         fi
     # NOTE: Don't use piping or subshells with while loop
     done < <(kubectl get pods -A --no-headers -o custom-columns="Namespace:metadata.namespace,Pod:metadata.name")
     printf "%*s\n" "$COLUMNS" "" | tr " " "="
     echo -e "${#HAYSTACK[@]} AWS Accounts found: [${!HAYSTACK[@]}]"
     printf "%*s\n" "$COLUMNS" "" | tr " " "="
-    printf '\e[?25h'
+    printf $CURSOR_ON
 }
 
 # fetchEbsVolumes gets the EBS volume data for the account
 function fetchEbsVolumes {
     local ACCOUNT=$1
     # Fetch unused EBS Volumes in JSON format
-    # json_data=$(aws ec2 describe-volumes --query 'sort_by(Volumes[?State==`available`],&CreateTime)[].[VolumeId,State,VolumeType,AvailabilityZone,CreateTime,Size]' --output json)
-    json_data=$(aws ec2 describe-volumes --filters "Name=status,Values=available" --query 'sort_by(Volumes[?!not_null(Tags[?Key==`ebs.csi.aws.com/cluster`].Value)],&CreateTime)[].[VolumeId,State,VolumeType,AvailabilityZone,CreateTime,Size]' --output json)
+    json_data=$(aws ec2 describe-volumes --query 'sort_by(Volumes[?State==`available`],&CreateTime)[].[VolumeId,State,VolumeType,AvailabilityZone,CreateTime,Size]' --output json)
+    # json_data=$(aws ec2 describe-volumes --filters "Name=status,Values=available" --query 'sort_by(Volumes[?!not_null(Tags[?Key==`ebs.csi.aws.com/cluster`].Value)],&CreateTime)[].[VolumeId,State,VolumeType,AvailabilityZone,CreateTime,Size]' --output json)
 
     # Check if JSON data is empty
     if [[ -z "$json_data" || "$json_data" == "[]" ]]; then
@@ -105,33 +155,37 @@ function fetchEbsVolumes {
     fi
 
     # Get the count of volumes
-    count=$(echo "$json_data" | jq 'length')
+    count=$(jq 'length' <<< "$json_data")
 
     # Print table headers
     echo -e "Volume ID\tState\t\tType\t\tAvailability Zone\tCreate Time\t\tSize (GB)"
     echo "-----------------------------------------------------------------------------------------------"
 
     # Initialize total size
-    let total_size=0
+    let account_size=0
+    let account_cost=0
 
     # Parse JSON and format output
     while IFS=$'\t' read -r volume_id state volume_type az create_time size; do
         printf "%-12s %-12s %-12s %-20s %-20s %-8s\n" "$volume_id" "$state" "$volume_type" "$az" "$create_time" "$size"
-        ((total_size += size))
+        ((account_size += size))
     done < <(echo "$json_data" | jq -r '.[] | @tsv')
 
     # Print summation row
     TOTAL_COUNT+=$count
-    TOTAL_SIZE+=$total_size
-    cost=$(awk "BEGIN {print $total_size * 0.1"})
-    TOTAL_COST+=$cost
+    TOTAL_SIZE+=$account_size
+    account_cost=$(awk "BEGIN { print $account_size * 0.1 }")
     echo "-----------------------------------------------------------------------------------------------"
-    printf "Sub-total: %-8s volumes\t\t\t\t\t\t %d GB\t\tCost: \$%d/month\n" "$count" "$total_size" "$cost"
+    printf "Sub-total: %-8s volumes\t\t\t\t\t\t %d GB\t\tCost: \$%d/month\n" "$count" "$account_size" "$account_cost"
 }
 
 function main {
-    [[ $(isAuthenticated) == true ]] && echo -en "\e[32mCredentials found!\e[0m Connecting to cluster..." || { echo -e "\e[31mNo valid credentials!\e[0m"; exit 1; }
-    [[ $(hasCluster) == true ]] && echo -e "\e[32mConnected!\e[0m" || { echo -e "\e[31mFailed!\e[0m"; exit 1; }
+    [[ $(isAuthenticated) == true ]] && echo -e "${GREEN}AWS credentials found!${NC}" || { echo -e "${RED}No valid AWS credentials!${NC} (Check ~/.aws/credentials)"; exit 1; }
+    [[ $(hasKubeconfig) == true ]] && echo -e "${GREEN}Kubeconfig found!${NC}" || { echo -e "${RED}Kubeconfig Failed!${NC} Check ~/.kube/config"; exit 1; }
+    [[ $(hasVPNConnection) == true ]] && echo -e "${GREEN}VPN connection established! (or bypassed)${NC}" || { echo -e "${RED}No VPN connection detected!${NC}"; exit 1; }
+    [[ $(hasSSHConnection) == true ]] && echo -e "${GREEN}SSH Jumbbox connection established!${NC}" || { echo -e "${RED}No SSH Jumbox detected!${NC}"; exit 1; }
+    [[ $(hasSSHTunnel) == true ]] && echo -e "${GREEN}SSH Tunnel found!${NC}" || { echo -e "${RED}No tunnel is listening!${NC} Check ~/.kube/config"; exit 1; }
+    [[ $(hasCluster) == true ]] && echo -e "${GREEN}Connected!${NC}" || { echo -e "${RED}Failed!${NC}\nCheck ~/.kube/config"; exit 1; }
 
     fetchPods
 
@@ -143,8 +197,8 @@ function main {
             --role-session-name "VOL_CHECKUP" 2>/dev/null)
         
         if [[ -z "$CREDENTIALS" ]]; then
-            # echo -e "\e[31mFailed to assume role for account $NEEDLE\e[0m"
-            echo -e "\e[31mFailed!\e[0m"
+            # echo -e "${RED}Failed to assume role for account $NEEDLE${NC}"
+            echo -e "${RED}Failed!${NC}"
             unset HAYSTACK["$NEEDLE"]
             continue
         fi
@@ -161,7 +215,7 @@ function main {
         
         # FIXME: HAYSTACK["$NEEDLE"] will be the pod name I overwrite it. Do I need to check to see if the pod name matches the alias?
         HAYSTACK["$NEEDLE"]="$ACCOUNT_ALIAS"
-        echo -e "\e[32mSuccess\e[0m, Account Alias: ${ACCOUNT_ALIAS}"
+        echo -e "${GREEN}Success${NC}, Account Alias: ${ACCOUNT_ALIAS}"
         
         fetchEbsVolumes "$NEEDLE"
         
@@ -170,6 +224,7 @@ function main {
     done
 
     printf "%*s\n" "$COLUMNS" "" | tr " " "="
+    TOTAL_COST=$(awk 'BEGIN { print int(ARGV[1] * 0.1) }' "$TOTAL_SIZE")
     printf "Number of Accounts: %d\t\t\t Number of EBS Volumes: %d \t\t\t Total Size: %d GB \t\t\t Total Cost: \$%d/month\n" "${#HAYSTACK[@]}" "$TOTAL_COUNT" "$TOTAL_SIZE" "$TOTAL_COST"
 }
 
