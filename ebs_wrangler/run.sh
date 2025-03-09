@@ -8,11 +8,11 @@
 #               
 #
 # Run Information: ./ebs_wrangler/run.sh
-# set -x
+
 # Declare globals
-declare -r ASSUME_ROLE_NAME=SERVADMIN
 declare -A HAYSTACK
 declare -i TOTAL_COUNT TOTAL_SIZE TOTAL_COST
+declare -r ASSUME_ROLE_NAME='SERVADMIN'
 declare hasResults=false
 
 # Magic Spells
@@ -22,7 +22,26 @@ RED='\e[31m'
 GREEN='\e[32m'
 YELLOW='\e[33m'
 BLUE='\e[34m'
-NC='\e[0m'
+NC='\e[0m' # No Color
+
+function usage {
+TAB=$'\t'
+# ${t} works too?
+cat << EOF
+Usage: $0 [options]
+EBS Wrangler features:
+	o Checks all pre-requesites are satisfied to run $0
+	o Gathers K8S Pods that contain AWS account info for management and tenants
+	o Gathers and reports unattached EBS volume data and costs
+
+	MANDATORY PARAMETERS
+	None.
+
+	OPTIONS
+${TAB} -h|--help ${TAB} Display usage help.
+${TAB} -d|--debug ${TAB} Display debugging info
+EOF
+}
 
 # isAuthenticated Checks to see if valid AWS credentials are available
 function isAuthenticated {
@@ -193,16 +212,17 @@ function fetchEbsVolumes {
     printf "Sub-total: %-8s volumes\t\t\t\t\t\t %d GB\t\tCost: \$%d/month\n" "$count" "$account_size" "$account_cost"
 }
 
-function main {
+function checkPrerequisites {
+
     [[ $(isAuthenticated) == true ]] && echo -e "${GREEN}AWS credentials found!${NC}" || { echo -e "${RED}No valid AWS credentials!${NC} (Check ~/.aws/credentials)"; exit 1; }
     [[ $(hasKubeconfig) == true ]] && echo -e "${GREEN}Kubeconfig found!${NC}" || { echo -e "${RED}Kubeconfig Failed!${NC} Check ~/.kube/config"; exit 1; }
     [[ $(hasVPNConnection) == true ]] && echo -e "${GREEN}VPN connection established! (or bypassed)${NC}" || { echo -e "${RED}No VPN connection detected!${NC}"; }
     [[ $(hasSSHConnection) == true ]] && echo -e "${GREEN}SSH Jumbbox connection established!${NC}" || { echo -e "${RED}No SSH Jumbox detected!${NC}"; exit 1; }
     [[ $(hasSSHTunnel) == true ]] && echo -e "${GREEN}SSH Tunnel found!${NC}" || { echo -e "${RED}No tunnel detected!${NC}"; }
     [[ $(hasCluster) == true ]] && echo -e "${GREEN}Connected!${NC}" || { echo -e "${RED}Failed!${NC}\nCheck ~/.kube/config"; exit 1; }
+}
 
-    fetchPods
-
+function generateReport {
     for NEEDLE in "${!HAYSTACK[@]}"; do
         echo -n "Assuming ${ASSUME_ROLE_NAME} for AWS Account: ${NEEDLE}... "
         
@@ -238,9 +258,39 @@ function main {
     done
 
     printf "%*s\n" "$COLUMNS" "" | tr " " "="
-    # TOTAL_COST=$(awk 'BEGIN { print int(ARGV[1] * 0.1) }' "$TOTAL_SIZE")
-    printf "Number of Accounts: %d\t\t\t Number of EBS Volumes: %d \t\t\t Total Size: %d GB \t\t\t Total Cost: \$%d/month\n" "${#HAYSTACK[@]}" "$TOTAL_COUNT" "$TOTAL_SIZE" "$TOTAL_COST"
+    printf "Number of Accounts: %d\t\t\t Number of EBS Volumes: %d \t\t\t Total Size: %d GB \t\t\t Total Cost: \$%d/month (@\$0.10/GB)\n" "${#HAYSTACK[@]}" "$TOTAL_COUNT" "$TOTAL_SIZE" "$TOTAL_COST"
+}
+
+
+function main {
+    checkPrerequisites
+    fetchPods
+    generateReport
 }
 
 # Entry Point
+GETOPT=`getopt -n $0 -o ,h,d \
+    -l help,debug`
+#eval set -- "$GETOPT"
+while true;
+do
+    case "$1" in
+    "")
+        # Default
+        break
+        ;;
+    -h|--help)
+        usage
+        exit 1
+        ;;
+    -d|--debug)
+        set -x
+        break
+        ;;
+    *)
+		echo "Unrecognized option(s)... continuing with defaults"
+        break
+		;;
+    esac
+done
 main
