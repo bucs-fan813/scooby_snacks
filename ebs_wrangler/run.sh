@@ -41,7 +41,20 @@ function hasKubeconfig {
 
 # hasSSHConnection Checks to see if there is an SSH connnection ESTABLISHED
 function hasSSHConnection {
-    local NETSTAT=$(netstat -tnp4 | grep -E '.*ssh\s*$')
+    if [ ! -x "$(command -v netstat 2>/dev/null)" ]; then
+        # Retrieve `/etc/os-release` information for OS using `source`
+        [[ -f /etc/os-release ]] && source /etc/os-release
+        if [ "${ID_LIKE}" == "fedora" ]; then
+            yum install -yq net-tools
+        elif [ "${ID_LIKE}" == "debian" ]; then
+            apt install -yqqq netstat-nat
+        else
+            echo "Uhh ohh, netstat is broken! Exiting!!"
+            exit 1
+        fi
+    fi
+    local LOCAL_ADDRESS=$(ip addr | awk '/inet / {print $2}' | grep '^10\.' | cut -d'/' -f1 | tail -n 1)
+    local NETSTAT=$(netstat -tnp4 | grep $LOCAL_ADDRESS)
     local PROTO=$(awk '{ print $1 }' <<< $NETSTAT)
     local SSH_SERVER_ADDRESS=$(awk '{ print $5 }' <<< $NETSTAT | cut -d ":" -f1)
     local SSH_SERVER_PORT=$(awk '{ print $5 }' <<< $NETSTAT | cut -d ":" -f2)
@@ -172,9 +185,10 @@ function fetchEbsVolumes {
     done < <(echo "$json_data" | jq -r '.[] | @tsv')
 
     # Print summation row
+    account_cost=$(awk 'BEGIN { print int(ARGV[1] * 0.1) }' "$account_size")
     TOTAL_COUNT+=$count
     TOTAL_SIZE+=$account_size
-    account_cost=$(awk "BEGIN { print $account_size * 0.1 }")
+    TOTAL_COST+=$account_cost
     echo "-----------------------------------------------------------------------------------------------"
     printf "Sub-total: %-8s volumes\t\t\t\t\t\t %d GB\t\tCost: \$%d/month\n" "$count" "$account_size" "$account_cost"
 }
@@ -182,9 +196,9 @@ function fetchEbsVolumes {
 function main {
     [[ $(isAuthenticated) == true ]] && echo -e "${GREEN}AWS credentials found!${NC}" || { echo -e "${RED}No valid AWS credentials!${NC} (Check ~/.aws/credentials)"; exit 1; }
     [[ $(hasKubeconfig) == true ]] && echo -e "${GREEN}Kubeconfig found!${NC}" || { echo -e "${RED}Kubeconfig Failed!${NC} Check ~/.kube/config"; exit 1; }
-    [[ $(hasVPNConnection) == true ]] && echo -e "${GREEN}VPN connection established! (or bypassed)${NC}" || { echo -e "${RED}No VPN connection detected!${NC}"; exit 1; }
+    [[ $(hasVPNConnection) == true ]] && echo -e "${GREEN}VPN connection established! (or bypassed)${NC}" || { echo -e "${RED}No VPN connection detected!${NC}"; }
     [[ $(hasSSHConnection) == true ]] && echo -e "${GREEN}SSH Jumbbox connection established!${NC}" || { echo -e "${RED}No SSH Jumbox detected!${NC}"; exit 1; }
-    [[ $(hasSSHTunnel) == true ]] && echo -e "${GREEN}SSH Tunnel found!${NC}" || { echo -e "${RED}No tunnel is listening!${NC} Check ~/.kube/config"; exit 1; }
+    [[ $(hasSSHTunnel) == true ]] && echo -e "${GREEN}SSH Tunnel found!${NC}" || { echo -e "${RED}No tunnel detected!${NC}"; }
     [[ $(hasCluster) == true ]] && echo -e "${GREEN}Connected!${NC}" || { echo -e "${RED}Failed!${NC}\nCheck ~/.kube/config"; exit 1; }
 
     fetchPods
@@ -224,7 +238,7 @@ function main {
     done
 
     printf "%*s\n" "$COLUMNS" "" | tr " " "="
-    TOTAL_COST=$(awk 'BEGIN { print int(ARGV[1] * 0.1) }' "$TOTAL_SIZE")
+    # TOTAL_COST=$(awk 'BEGIN { print int(ARGV[1] * 0.1) }' "$TOTAL_SIZE")
     printf "Number of Accounts: %d\t\t\t Number of EBS Volumes: %d \t\t\t Total Size: %d GB \t\t\t Total Cost: \$%d/month\n" "${#HAYSTACK[@]}" "$TOTAL_COUNT" "$TOTAL_SIZE" "$TOTAL_COST"
 }
 
