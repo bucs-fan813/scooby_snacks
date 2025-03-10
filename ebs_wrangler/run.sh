@@ -26,7 +26,9 @@ GRAY='\e[90m'
 WHITE='\e[97m'
 BOLD='\e[1m'
 NC='\e[0m' # No Color
+COLUMNS=${COLUMNS:-$(tput cols)}
 
+echo "COLUMNS=$COLUMNS"
 function usage {
 TAB=$'\t'
 # ${t} works too?
@@ -197,7 +199,7 @@ function fetchEbsVolumes {
 
     # Print table headers
     echo -e "Volume ID\tState\t\tType\t\tAvailability Zone\tCreate Time\t\tSize (GB)"
-    echo "-----------------------------------------------------------------------------------------------"
+    printf "%*s\n" "$COLUMNS" "" | tr " " "="
 
     # Initialize total size
     let account_size=0
@@ -214,8 +216,8 @@ function fetchEbsVolumes {
     TOTAL_COUNT+=$count
     TOTAL_SIZE+=$account_size
     TOTAL_COST+=$account_cost
-    echo "-----------------------------------------------------------------------------------------------"
-    printf "Sub-total: %-8s volumes\t\t\t\t\t\t %d GB\t\tCost: \$%d/month\n" "$count" "$account_size" "$account_cost"
+    printf "%*s\n" "$COLUMNS" "" | tr " " "="
+    printf "Sub-total: %s volumes\t\t\t %d GB\t\t\tCost: \$%d/month\n" "$count" "$account_size" "$account_cost"
 }
 
 function checkPrerequisites {
