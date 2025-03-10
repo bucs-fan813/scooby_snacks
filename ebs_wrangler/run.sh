@@ -13,6 +13,7 @@
 declare -A HAYSTACK
 declare -i TOTAL_COUNT TOTAL_SIZE TOTAL_COST
 declare -r ASSUME_ROLE_NAME='SERVADMIN'
+declare AWS_PARTITION
 declare hasResults=false
 
 # Magic Spells
@@ -45,7 +46,8 @@ function checkPrerequisites {
 
 # isAuthenticated (bool) Checks to see if valid AWS credentials are available
 function isAuthenticated {
-    aws sts get-caller-identity > /dev/null 2>&1 && echo true || echo false
+    AWS_PARTITION=$(aws sts get-caller-identity --query "Arn" --output text 2> /dev/null | cut -d':' -f2)
+    [[ -n $AWS_PARTITION ]] && echo true || echo false
 }
 
 # hasCluster Checks (bool) to see if K8S cluster is available
@@ -218,7 +220,7 @@ function generateReport {
         echo -en "Assuming ${WHITE}${BOLD}${ASSUME_ROLE_NAME}${NC} for AWS Account: ${BLUE}${NEEDLE}... "
         
         local CREDENTIALS=$(aws sts assume-role \
-            --role-arn "arn:aws-us-gov:iam::$NEEDLE:role/$ASSUME_ROLE_NAME" \
+            --role-arn "arn:${AWS_PARTITION}:iam::${NEEDLE}:role/${ASSUME_ROLE_NAME}" \
             --role-session-name "VOL_CHECKUP" 2>/dev/null)
         
         if [[ -z "$CREDENTIALS" ]]; then
