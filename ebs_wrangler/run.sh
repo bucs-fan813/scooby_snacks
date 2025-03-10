@@ -13,7 +13,6 @@
 declare -A HAYSTACK
 declare -i TOTAL_COUNT TOTAL_SIZE TOTAL_COST
 declare -r ASSUME_ROLE_NAME='SERVADMIN'
-declare AWS_PARTITION
 declare hasResults=false
 
 # Magic Spells
@@ -29,9 +28,10 @@ BOLD='\e[1m'
 NC='\e[0m' # No Color
 COLUMNS=${COLUMNS:-$(tput cols)}
 
+# checkPrerequisites Checks credentials and connectivity to K8S cluster
 function checkPrerequisites {
     echo -n "AWS credentials check: "
-    [[ $(isAuthenticated) == true ]] && echo -e "${GREEN}Passed!${NC}" || { echo -e "${RED}Failed! ${GRAY}(Check ~/.aws/credentials)${NC} "; exit 1; }
+    [[ $(isAuthenticated) == true ]] && echo -e "${GREEN}Passed!${NC}" || { echo -e "${RED}Failed! ${GRAY}(Check ~/.aws/credentials or ENVs)${NC} "; exit 1; }
     echo -n "Kubeconfig check: "
     [[ $(hasKubeconfig) == true ]] && echo -e "${GREEN}Passed!${NC}" || { echo -e "${RED}Failed! ${GRAY}(Check ~/.kube/config)${NC}"; exit 1; }
     echo -n "VPN Connection check: "
@@ -46,8 +46,7 @@ function checkPrerequisites {
 
 # isAuthenticated (bool) Checks to see if valid AWS credentials are available
 function isAuthenticated {
-    AWS_PARTITION=$(aws sts get-caller-identity --query "Arn" --output text 2> /dev/null | cut -d':' -f2)
-    [[ -n $AWS_PARTITION ]] && echo true || echo false
+    aws sts get-caller-identity --query "Arn" --output text > /dev/null 2>&1 && echo true || echo false
 }
 
 # hasCluster Checks (bool) to see if K8S cluster is available
@@ -71,7 +70,7 @@ function hasSSHConnection {
         elif [ "${ID_LIKE}" == "debian" ]; then
             apt install -yqqq netstat-nat
         else
-            echo "Uhh ohh, you're using a Mac arent't you!?! netsat is not available."
+            echo "Uhh ohh, netsat is not available! Are you using a Mac!?! "
             exit 1
         fi
     fi
@@ -109,16 +108,17 @@ function hasSSHTunnel {
 function hasVPNConnection {
     local HOST_NAME=${1:-'ingress-live-black-aec2dda42feecce6.elb.us-gov-west-1.amazonaws.com'}
     local HOST_PORT=${2:-'22'}
-    # /dev/tcp is a special file that allows you to establish network connections using the TCP/IP protocol
+    # /dev/tcp is a special (POSIX compliant) file that allows you to establish network connections using the TCP/IP protocol
     timeout 0.5s bash -c "echo -n 2>/dev/null < /dev/tcp/${HOST_NAME}/${HOST_PORT}" && echo true || echo false
 }
 
 # fetchEbsVolumes gets the EBS volume data for the account
 function fetchEbsVolumes {
     local ACCOUNT=$1 # For future use
-    # Fetch unused EBS Volumes in JSON format
+    # Query unattached volumes 
     local json_data=$(aws ec2 describe-volumes --query 'sort_by(Volumes[?State==`available`],&CreateTime)[].[VolumeId,State,VolumeType,AvailabilityZone,CreateTime,Size]' --output json)
-    # json_data=$(aws ec2 describe-volumes --filters "Name=status,Values=available" --query 'sort_by(Volumes[?!not_null(Tags[?Key==`ebs.csi.aws.com/cluster`].Value)],&CreateTime)[].[VolumeId,State,VolumeType,AvailabilityZone,CreateTime,Size]' --output json)
+    # Query unattached volumes with `ebs.csi.aws.com/cluster`` tag
+    # local json_data=$(aws ec2 describe-volumes --filters "Name=status,Values=available" --query 'sort_by(Volumes[?!not_null(Tags[?Key==`ebs.csi.aws.com/cluster`].Value)],&CreateTime)[].[VolumeId,State,VolumeType,AvailabilityZone,CreateTime,Size]' --output json)
 
     # Check if JSON data is empty
     if [[ -z "$json_data" || "$json_data" == "[]" ]]; then
@@ -216,9 +216,12 @@ function fetchPods {
 
 # generateReport Prints the report of each AWS account in HAYSTACK
 function generateReport {
+    # FIXME: Why cant I set AWS_PARTITION from isAuthenticated? Functions doent always bring in global scoped vars?
+    local AWS_PARTITION=$(aws sts get-caller-identity --query "Arn" --output text 2> /dev/null | cut -d':' -f2)
     for NEEDLE in "${!HAYSTACK[@]}"; do
-        echo -en "Assuming ${WHITE}${BOLD}${ASSUME_ROLE_NAME}${NC} for AWS Account: ${BLUE}${NEEDLE}... "
-        
+        # echo -en "Assuming ${WHITE}${BOLD}${ASSUME_ROLE_NAME}${NC} for AWS Account: ${BLUE}${NEEDLE}... "
+        echo -en "Assuming ${WHITE}${BOLD}arn:${AWS_PARTITION}:iam::${NEEDLE}:role/${ASSUME_ROLE_NAME}${NC} for AWS Account: ${BLUE}${NEEDLE}... "
+
         local CREDENTIALS=$(aws sts assume-role \
             --role-arn "arn:${AWS_PARTITION}:iam::${NEEDLE}:role/${ASSUME_ROLE_NAME}" \
             --role-session-name "VOL_CHECKUP" 2>/dev/null)
@@ -251,7 +254,7 @@ function generateReport {
 
     # Print table footer
     printf "%*s\n" "$COLUMNS" "" | tr " " "="
-    printf "${WHITE}${BOLD}Number of Accounts:${NC} %d\t\t\t ${WHITE}${BOLD}Number of EBS Volumes:${NC} %d \t\t\t ${WHITE}${BOLD}Total Size:${NC} %d GB \t\t\t ${WHITE}${BOLD}Total Cost:${NC} \$%d/month ${GRAY}(@ \$0.10/GB)${NC}\n" "${#HAYSTACK[@]}" "$TOTAL_COUNT" "$TOTAL_SIZE" "$TOTAL_COST"
+    printf "${WHITE}${BOLD}Number of Accounts:${NC} %d\t\t\t ${WHITE}${BOLD}Number of unattached EBS Volumes:${NC} %d \t\t\t ${WHITE}${BOLD}Total Size:${NC} %d GB \t\t\t ${WHITE}${BOLD}Total Cost:${NC} \$%d/month ${GRAY}(@ \$0.10/GB)${NC}\n" "${#HAYSTACK[@]}" "$TOTAL_COUNT" "$TOTAL_SIZE" "$TOTAL_COST"
 }
 
 # Cause why not!?!
@@ -286,7 +289,7 @@ EBS Wrangler features:
 
 	OPTIONS
 ${TAB} -h|--help ${TAB} Display usage help.
-${TAB} -d|--debug ${TAB} Display debugging info
+${TAB} -d|--debug ${TAB} Display debugging info with output
 EOF
 }
 
