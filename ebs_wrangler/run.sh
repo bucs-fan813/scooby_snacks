@@ -126,9 +126,9 @@ function fetchEbsVolumes {
     local ACCOUNT=$1 # For future use
     ACCOUNT_EBS_VOL_IDS=() # Reset array
     # Query unattached volumes 
-    # local json_data=$(aws ec2 describe-volumes --query 'sort_by(Volumes[?State==`available`],&CreateTime)[].[VolumeId,State,VolumeType,AvailabilityZone,CreateTime,Size]' --output json)
+    local json_data=$(aws ec2 describe-volumes --query 'sort_by(Volumes[?State==`available`],&CreateTime)[].[VolumeId,State,VolumeType,AvailabilityZone,CreateTime,Size]' --output json)
     # Query unattached volumes with `ebs.csi.aws.com/cluster`` tag
-    local json_data=$(aws ec2 describe-volumes --filters "Name=status,Values=available" --query 'sort_by(Volumes[?!not_null(Tags[?Key==`ebs.csi.aws.com/cluster`].Value)],&CreateTime)[].[VolumeId,State,VolumeType,AvailabilityZone,CreateTime,Size]' --output json)
+    # local json_data=$(aws ec2 describe-volumes --filters "Name=status,Values=available" --query 'sort_by(Volumes[?!not_null(Tags[?Key==`ebs.csi.aws.com/cluster`].Value)],&CreateTime)[].[VolumeId,State,VolumeType,AvailabilityZone,CreateTime,Size]' --output json)
 
     # Check if JSON data is empty
     if [[ -z "$json_data" || "$json_data" == "[]" ]]; then
@@ -296,19 +296,21 @@ EBS Wrangler features:
 	o Checks all pre-requesites are satisfied to run $0
 	o Gathers K8S Pods that contain AWS account info for management and tenants
 	o Gathers and reports unattached EBS volume data and costs
+	o Deletes unattached EBS volumes
 
 	MANDATORY PARAMETERS
 	None.
 
 	OPTIONS
 ${TAB} -h|--help ${TAB} Display usage help.
-${TAB} -d|--debug ${TAB} Display debugging info with output
+${TAB} -v|--debug ${TAB} Display debugging info with output
+${TAB} -d|--delete ${TAB} Delete the volumes found by shown in the report
 EOF
 }
 
 # Entry Point
-GETOPT=`getopt -n $0 -o ,h,d \
-    -l help,debug`
+GETOPT=`getopt -n $0 -o ,h,d,v \
+    -l help,delete,debug`
 #eval set -- "$GETOPT"
 while true;
 do
