@@ -10,10 +10,12 @@
 # Run Information: ./ebs_wrangler/run.sh
 
 # Declare globals
-declare -A HAYSTACK
-declare -i TOTAL_COUNT TOTAL_SIZE TOTAL_COST
-declare -r ASSUME_ROLE_NAME='SERVADMIN'
-declare hasResults=false
+declare -A HAYSTACK                                 # Associative array
+declare -a ALL_EBS_VOL_IDS ACCOUNT_EBS_VOL_IDS      # Indexed array
+declare -i TOTAL_COUNT TOTAL_SIZE TOTAL_COST        # Integers
+declare -r ASSUME_ROLE_NAME='SERVADMIN'             # Read-only
+declare hasResults=false DELETE_VOLS=false          # Boolean
+# declare -r REGION=$(aws configure list | grep region | awk '{print $2}') # future use
 
 # Magic Spells
 CURSOR_OFF='\e[?25l'
@@ -112,17 +114,25 @@ function hasVPNConnection {
     timeout 0.5s bash -c "echo -n 2>/dev/null < /dev/tcp/${HOST_NAME}/${HOST_PORT}" && echo true || echo false
 }
 
+# deleteEbsVolumes Deletes EBS volumes discovered by fetchEbsVolumes
+function deleteEbsVolumes {
+    for VOLUME in "${ACCOUNT_EBS_VOL_IDS[@]}"; do
+        aws ec2 delete-volume --volume-id $VOLUME --dry-run 2>/dev/null
+    done
+}
+
 # fetchEbsVolumes gets the EBS volume data for the account
 function fetchEbsVolumes {
     local ACCOUNT=$1 # For future use
+    ACCOUNT_EBS_VOL_IDS=() # Reset array
     # Query unattached volumes 
-    local json_data=$(aws ec2 describe-volumes --query 'sort_by(Volumes[?State==`available`],&CreateTime)[].[VolumeId,State,VolumeType,AvailabilityZone,CreateTime,Size]' --output json)
+    # local json_data=$(aws ec2 describe-volumes --query 'sort_by(Volumes[?State==`available`],&CreateTime)[].[VolumeId,State,VolumeType,AvailabilityZone,CreateTime,Size]' --output json)
     # Query unattached volumes with `ebs.csi.aws.com/cluster`` tag
-    # local json_data=$(aws ec2 describe-volumes --filters "Name=status,Values=available" --query 'sort_by(Volumes[?!not_null(Tags[?Key==`ebs.csi.aws.com/cluster`].Value)],&CreateTime)[].[VolumeId,State,VolumeType,AvailabilityZone,CreateTime,Size]' --output json)
+    local json_data=$(aws ec2 describe-volumes --filters "Name=status,Values=available" --query 'sort_by(Volumes[?!not_null(Tags[?Key==`ebs.csi.aws.com/cluster`].Value)],&CreateTime)[].[VolumeId,State,VolumeType,AvailabilityZone,CreateTime,Size]' --output json)
 
     # Check if JSON data is empty
     if [[ -z "$json_data" || "$json_data" == "[]" ]]; then
-        echo "No available volumes found or failed to retrieve data."
+        echo -e "${RED}No available volumes found or failed to retrieve data.${NC}"
         return
     fi
 
@@ -141,6 +151,8 @@ function fetchEbsVolumes {
     while IFS=$'\t' read -r volume_id state volume_type az create_time size; do
         printf "%-21s\t%-9s\t%-4s\t%-17s\t%-32s\t%-9s\n" "$volume_id" "$state" "$volume_type" "$az" "$create_time" "$size"
         ((account_size += size))
+        ACCOUNT_EBS_VOL_IDS+=($volume_id)
+        ALL_EBS_VOL_IDS+=($volume_id)
     # NOTE: Don't use piping or subshells with while loop
     done < <(echo "$json_data" | jq -r '.[] | @tsv')
 
@@ -247,7 +259,7 @@ function generateReport {
         echo -e "${GREEN}Success${NC}, Account Alias: ${ACCOUNT_ALIAS}"
         
         fetchEbsVolumes "$NEEDLE"
-        
+        [[ $DELETE_VOLS == true ]] && deleteEbsVolumes
         # Clear AWS credentials to avoid roid-rage!
         unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
     done
@@ -271,6 +283,7 @@ function main {
     checkPrerequisites
     fetchPods
     generateReport
+    # echo -e "${BOLD}${WHITE}${#ALL_EBS_VOL_IDS[@]} Volumes will be deleted: [${ALL_EBS_VOL_IDS[@]}]${NC}"
 }
 
 # usage Displays help
@@ -308,7 +321,11 @@ do
         usage
         exit 1
         ;;
-    -d|--debug)
+    -d|--delete)
+        DELETE_VOLS=true
+        break
+        ;;        
+    -v|--debug)
         set -x
         break
         ;;
