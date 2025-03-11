@@ -56,9 +56,11 @@ function isAuthenticated {
     aws sts get-caller-identity --query "Arn" --output text > /dev/null 2>&1 && echo true || echo false
 }
 
+# excludeNamespaces Formats a comma-delimited string of values. EXCLUDE_NAMESPACES will contain the values need to exlude namespaces from the report using the kubectl --field-selector
 function excludeNamespaces {
         local input=$1
-        [[ -n $input ]] || { echo -e "${RED}At least one namespace must be provided when excluding!${NC}"; exit 1; }
+        [[ -n $input ]] || { echo -e "${RED}At least one namespace must be provided when using -e|--exclude${NC}"; exit 1; }
+        # Prepend metadata.namespace!= to each item in the list
         EXCLUDE_NAMESPACES=$(echo "$input" | sed 's/,/ metadata.namespace!=/g' | sed 's/^/metadata.namespace!=/')
 }
 
@@ -180,13 +182,13 @@ function fetchEbsVolumes {
 
 # fetchPods Gets the list of namespaces and pod names
 function fetchPods {
-    printf $CURSOR_OFF
     local CLUSTER_ARN=$(kubectl config current-context)
     local CLUSTER_NAME=$(sed -E 's#.*\W(\w*)#\1#' <<< "${CLUSTER_ARN}")
+    let i=0
+    
+    printf $CURSOR_OFF
     echo -e "Fetching pods from: ${BLUE}${BOLD}${CLUSTER_NAME}${NC} ${GRAY}(${CLUSTER_ARN})${NC}..."
     [[ $INCLUDE_TENANTS == false ]] && { excludeNamespaces 'tenants'; echo -e "${YELLOW}Excluding tenants!${NC}"; } || echo -e "${BLUE}Including tenants!${NC}"
-
-    let i=0
     # Get the list of namespaces and pod names (kubectl get pods -A --no-headers -o custom-columns="Namespace:metadata.namespace,Pod:metadata.name")
     while read -r NAMESPACE POD; do
         # Ensure both namespace and pod values are non-empty
@@ -295,7 +297,7 @@ function main {
     checkPrerequisites
     fetchPods
     generateReport
-    # echo -e "${BOLD}${WHITE}${#ALL_EBS_VOL_IDS[@]} Volumes will be deleted: [${ALL_EBS_VOL_IDS[@]}]${NC}"
+    echo "${BOLD}${WHITE}${#ALL_EBS_VOL_IDS[@]} Volumes will be deleted: [${ALL_EBS_VOL_IDS[@]}]${NC}" > /dev/null 2>&1
 }
 
 # usage Displays help
@@ -340,12 +342,12 @@ do
         DELETE_VOLS=true
         break
         ;;
-    -t|--tenants)
-		INCLUDE_TENANTS=true
-        break
-        ;;
     -v|--debug)
         set -x
+        break
+        ;;
+    -t|--tenants)
+		INCLUDE_TENANTS=true
         break
         ;;
     *)
