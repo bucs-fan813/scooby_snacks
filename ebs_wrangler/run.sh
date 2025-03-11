@@ -14,8 +14,13 @@ declare -A HAYSTACK                                 # Associative array
 declare -a ALL_EBS_VOL_IDS ACCOUNT_EBS_VOL_IDS      # Indexed array
 declare -i TOTAL_COUNT TOTAL_SIZE TOTAL_COST        # Integers
 declare -r ASSUME_ROLE_NAME='SERVADMIN'             # Read-only
-declare hasResults=false DELETE_VOLS=false          # Boolean
-# declare -r REGION=$(aws configure list | grep region | awk '{print $2}') # future use
+declare hasResults=false                            # Boolean
+declare DELETE_VOLS=false                           # Boolean
+declare INCLUDE_TENANTS=false                       # Boolean
+
+# Future use
+declare EXCLUDE_NAMESPACES
+# declare -r REGION=$(aws configure list | grep region | awk '{print $2}')
 
 # Magic Spells
 CURSOR_OFF='\e[?25l'
@@ -49,6 +54,12 @@ function checkPrerequisites {
 # isAuthenticated (bool) Checks to see if valid AWS credentials are available
 function isAuthenticated {
     aws sts get-caller-identity --query "Arn" --output text > /dev/null 2>&1 && echo true || echo false
+}
+
+function excludeNamespaces {
+        local input=$1
+        [[ -n $input ]] || { echo -e "${RED}At least one namespace must be provided when excluding!${NC}"; exit 1; }
+        EXCLUDE_NAMESPACES=$(echo "$input" | sed 's/,/ metadata.namespace!=/g' | sed 's/^/metadata.namespace!=/')
 }
 
 # hasCluster Checks (bool) to see if K8S cluster is available
@@ -173,6 +184,7 @@ function fetchPods {
     local CLUSTER_ARN=$(kubectl config current-context)
     local CLUSTER_NAME=$(sed -E 's#.*\W(\w*)#\1#' <<< "${CLUSTER_ARN}")
     echo -e "Fetching pods from: ${BLUE}${BOLD}${CLUSTER_NAME}${NC} ${GRAY}(${CLUSTER_ARN})${NC}..."
+    [[ $INCLUDE_TENANTS == false ]] && { excludeNamespaces 'tenants'; echo -e "${YELLOW}Excluding tenants!${NC}"; } || echo -e "${BLUE}Including tenants!${NC}"
 
     let i=0
     # Get the list of namespaces and pod names (kubectl get pods -A --no-headers -o custom-columns="Namespace:metadata.namespace,Pod:metadata.name")
@@ -217,7 +229,7 @@ function fetchPods {
             echo -e "Added: ${GREEN}$AWS_ACCOUNT${NC}, Namespace: $NAMESPACE, Pod: $POD"
         fi
     # NOTE: Don't use piping or subshells with while loop
-    done < <(kubectl get pods -A --no-headers -o custom-columns="Namespace:metadata.namespace,Pod:metadata.name")
+    done < <(kubectl get pods -A --no-headers --field-selector="${EXCLUDE_NAMESPACES}" -o custom-columns="Namespace:metadata.namespace,Pod:metadata.name")
 
     # Print summation row
     printf "%*s\n" "$COLUMNS" "" | tr " " "="
@@ -302,15 +314,16 @@ EBS Wrangler features:
 	None.
 
 	OPTIONS
+${TAB} -d|--delete ${TAB} Delete the volumes found by shown in the report (remove --dry-run from deleteEbsVolumes() we're ready to delete)
 ${TAB} -h|--help ${TAB} Display usage help.
+${TAB} -t|--tennants ${TAB} Include tenant accounts in the report.
 ${TAB} -v|--debug ${TAB} Display debugging info with output
-${TAB} -d|--delete ${TAB} Delete the volumes found by shown in the report
 EOF
 }
 
 # Entry Point
-GETOPT=`getopt -n $0 -o ,h,d,v \
-    -l help,delete,debug`
+GETOPT=`getopt -n $0 -o ,h,d,v,t \
+    -l help,delete,debug,tenants`
 #eval set -- "$GETOPT"
 while true;
 do
@@ -326,7 +339,11 @@ do
     -d|--delete)
         DELETE_VOLS=true
         break
-        ;;        
+        ;;
+    -t|--tenants)
+		INCLUDE_TENANTS=true
+        break
+        ;;
     -v|--debug)
         set -x
         break
