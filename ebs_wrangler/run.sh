@@ -10,11 +10,11 @@
 # Run Information: ./ebs_wrangler/run.sh
 
 # Declare globals
-declare -A HAYSTACK                                 # Associative array
+declare -A HAYSTACK                                 # Associative array (dictionary)
 declare -a ALL_EBS_VOL_IDS ACCOUNT_EBS_VOL_IDS      # Indexed array
 declare -i TOTAL_COUNT TOTAL_SIZE TOTAL_COST        # Integers
 declare -r ASSUME_ROLE_NAME='SERVADMIN'             # Read-only
-declare hasResults=false                            # Boolean
+declare HAS_RESULTS=false                           # Boolean
 declare DELETE_VOLS=false                           # Boolean
 declare INCLUDE_TENANTS=false                       # Boolean
 
@@ -37,6 +37,8 @@ COLUMNS=${COLUMNS:-$(tput cols)}
 
 # checkPrerequisites Checks credentials and connectivity to K8S cluster
 function checkPrerequisites {
+    echo -n "SUDO check: "
+    [[ $(checkSudo) == true ]] && echo -e "${GREEN}Passed!${NC}" || { echo -e "${RED}Failed! ${GRAY}(Please use \"sudo\" or run as root)${NC} "; exit 1; }
     echo -n "AWS credentials check: "
     [[ $(isAuthenticated) == true ]] && echo -e "${GREEN}Passed!${NC}" || { echo -e "${RED}Failed! ${GRAY}(Check ~/.aws/credentials or ENVs)${NC} "; exit 1; }
     echo -n "Kubeconfig check: "
@@ -49,6 +51,11 @@ function checkPrerequisites {
     [[ $(hasSSHTunnel) == true ]] && echo -e "${GREEN}Passed!${NC}" || { echo -e "${YELLOW}Skipped${NC}"; }
     echo -n "kubectl commands check: "
     [[ $(hasCluster) == true ]] && echo -e "${GREEN}Passed!${NC}" || { echo -e "${RED}Houston we have a problem! ${GRAY}(Are you sure your connections are setup correctly?)${NC}"; exit 1; }
+}
+
+# checkSudo Check for sudo or root on linux
+function checkSudo {
+[[ "$EUID" -eq 0 ]]	&& echo true || echo false
 }
 
 # isAuthenticated (bool) Checks to see if valid AWS credentials are available
@@ -140,7 +147,7 @@ function fetchEbsVolumes {
     ACCOUNT_EBS_VOL_IDS=() # Reset array
     # Query unattached volumes 
     local json_data=$(aws ec2 describe-volumes --query 'sort_by(Volumes[?State==`available`],&CreateTime)[].[VolumeId,State,VolumeType,AvailabilityZone,CreateTime,Size]' --output json)
-    # Query unattached volumes with `ebs.csi.aws.com/cluster`` tag
+    # Query unattached volumes with `ebs.csi.aws.com/cluster` tag
     # local json_data=$(aws ec2 describe-volumes --filters "Name=status,Values=available" --query 'sort_by(Volumes[?!not_null(Tags[?Key==`ebs.csi.aws.com/cluster`].Value)],&CreateTime)[].[VolumeId,State,VolumeType,AvailabilityZone,CreateTime,Size]' --output json)
 
     # Check if JSON data is empty
@@ -187,7 +194,7 @@ function fetchPods {
     let i=0
     
     printf $CURSOR_OFF
-    echo -e "Fetching pods from: ${BLUE}${BOLD}${CLUSTER_NAME}${NC} ${GRAY}(${CLUSTER_ARN})${NC}..."
+    echo -en "Fetching pods from: ${BLUE}${BOLD}${CLUSTER_NAME}${NC} ${GRAY}(${CLUSTER_ARN})${NC}... "
     [[ $INCLUDE_TENANTS == false ]] && { excludeNamespaces 'tenants'; echo -e "${YELLOW}Excluding tenants!${NC}"; } || echo -e "${BLUE}Including tenants!${NC}"
     # Get the list of namespaces and pod names (kubectl get pods -A --no-headers -o custom-columns="Namespace:metadata.namespace,Pod:metadata.name")
     while read -r NAMESPACE POD; do
@@ -226,7 +233,7 @@ function fetchPods {
             fi
 
             # Store valid accounts (and don't create additional spinners)
-            [[ $hasResults == false ]] && { hasResults=true; echo ""; }
+            [[ $HAS_RESULTS == false ]] && { HAS_RESULTS=true; echo ""; }
             HAYSTACK["$AWS_ACCOUNT"]="$POD"
             echo -e "Added: ${GREEN}$AWS_ACCOUNT${NC}, Namespace: $NAMESPACE, Pod: $POD"
         fi
@@ -245,7 +252,6 @@ function generateReport {
     # FIXME: Why cant I set AWS_PARTITION from isAuthenticated? Functions doent always bring in global scoped vars?
     local AWS_PARTITION=$(aws sts get-caller-identity --query "Arn" --output text 2> /dev/null | cut -d':' -f2)
     for NEEDLE in "${!HAYSTACK[@]}"; do
-        # echo -en "Assuming ${WHITE}${BOLD}${ASSUME_ROLE_NAME}${NC} for AWS Account: ${BLUE}${NEEDLE}... "
         echo -en "Assuming ${WHITE}${BOLD}arn:${AWS_PARTITION}:iam::${NEEDLE}:role/${ASSUME_ROLE_NAME}${NC} for AWS Account: ${BLUE}${NEEDLE}... "
 
         local CREDENTIALS=$(aws sts assume-role \
@@ -258,9 +264,9 @@ function generateReport {
             continue
         fi
         
-        export AWS_ACCESS_KEY_ID=$(echo "$CREDENTIALS" | jq -r '.Credentials.AccessKeyId')
-        export AWS_SECRET_ACCESS_KEY=$(echo "$CREDENTIALS" | jq -r '.Credentials.SecretAccessKey')
-        export AWS_SESSION_TOKEN=$(echo "$CREDENTIALS" | jq -r '.Credentials.SessionToken')
+        export AWS_ACCESS_KEY_ID=$(jq -r '.Credentials.AccessKeyId' <<< $CREDENTIALS)
+        export AWS_SECRET_ACCESS_KEY=$(jq -r '.Credentials.SecretAccessKey' <<< $CREDENTIALS)
+        export AWS_SESSION_TOKEN=$(jq -r '.Credentials.SessionToken' <<< $CREDENTIALS)
         
         local ACCOUNT_ALIAS=$(aws iam list-account-aliases --query 'AccountAliases[0]' --output text 2>/dev/null | awk '{print toupper($0)}')
         
@@ -285,7 +291,7 @@ function generateReport {
 
 # Cause why not!?!
 spinner() {
-    [[ $hasResults == true ]] && return
+    [[ $HAS_RESULTS == true ]] && return
 	local i=$1
 	local sp="◐◓◑◒"
     # NOTE: https://unix.stackexchange.com/questions/225179/display-spinner-while-waiting-for-some-process-to-finish
@@ -316,9 +322,9 @@ EBS Wrangler features:
 	None.
 
 	OPTIONS
-${TAB} -d|--delete ${TAB} Delete the volumes found by shown in the report (remove --dry-run from deleteEbsVolumes() we're ready to delete)
+${TAB} -d|--delete ${TAB} Delete the volumes found by shown in the report (remove --dry-run from deleteEbsVolumes() after all environment have been tested)
 ${TAB} -h|--help ${TAB} Display usage help.
-${TAB} -t|--tennants ${TAB} Include tenant accounts in the report.
+${TAB} -t|--tennants ${TAB} Include tenant pods/accounts in the report.
 ${TAB} -v|--debug ${TAB} Display debugging info with output
 EOF
 }
@@ -353,7 +359,7 @@ do
     *)
 		echo "Unrecognized option(s)... continuing with defaults"
         break
-		;;
+        ;;
     esac
 done
 main
