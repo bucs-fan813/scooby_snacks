@@ -19,7 +19,8 @@ declare DELETE_VOLS=false                           # Boolean
 declare INCLUDE_TENANTS=false                       # Boolean
 
 # Future use
-declare EXCLUDE_NAMESPACES
+declare EXCLUDE_NAMESPACES                          # Sting (comma separated)
+declare INGRESS_ENDPOINT                            # String
 # declare -r REGION=$(aws configure list | grep region | awk '{print $2}')
 
 # Magic Spells
@@ -44,7 +45,7 @@ function checkPrerequisites {
     echo -n "Kubeconfig check: "
     [[ $(hasKubeconfig) == true ]] && echo -e "${GREEN}Passed!${NC}" || { echo -e "${RED}Failed! ${GRAY}(Check ~/.kube/config)${NC}"; exit 1; }
     echo -n "VPN Connection check: "
-    [[ $(hasVPNConnection) == true ]] && echo -e "${GREEN}Passed! ${GRAY}(or skipped)${NC}" || { echo -e "${YELLOW}Skipped${NC}"; }
+    [[ $(hasVPNConnection $INGRESS_ENDPOINT) == true ]] && echo -e "${GREEN}Passed! ${GRAY}(or skipped)${NC}" || { echo -e "${YELLOW}Skipped${NC}"; }
     echo -n "Jumpbox Connection check: "
     [[ $(hasSSHConnection) == true ]] && echo -e "${GREEN}Passed!${NC}" || { echo -e "${YELLOW}Skipped${NC}"; }
     echo -n "SSH tunnel check: "
@@ -292,7 +293,7 @@ function generateReport {
 # Cause why not!?!
 spinner() {
     [[ $HAS_RESULTS == true ]] && return
-	local i=$1
+	let i=$1
 	local sp="◐◓◑◒"
     # NOTE: https://unix.stackexchange.com/questions/225179/display-spinner-while-waiting-for-some-process-to-finish
 	printf "\b${sp:i++%${#sp}:1}"
@@ -323,6 +324,7 @@ EBS Wrangler features:
 
 	OPTIONS
 ${TAB} -d|--delete ${TAB} Delete the volumes shown in the report (remove --dry-run from deleteEbsVolumes() after all environments have been tested)
+${TAB} -i|--ingress ${TAB} Display usage help.
 ${TAB} -h|--help ${TAB} Display usage help.
 ${TAB} -t|--tennants ${TAB} Include tenant pods/accounts in the report.
 ${TAB} -v|--debug ${TAB} Display debugging info with output
@@ -330,8 +332,8 @@ EOF
 }
 
 # Entry Point
-GETOPT=`getopt -n $0 -o ,h,d,v,t \
-    -l help,delete,debug,tenants`
+GETOPT=`getopt -n $0 -o ,h,d,v,t,t \
+    -l help,delete,debug,tenants,ingress`
 #eval set -- "$GETOPT"
 while true;
 do
@@ -343,6 +345,10 @@ do
     -h|--help)
         usage
         exit 1
+        ;;
+    -i|--ingress)
+        INGRESS_ENDPOINT=$2
+        break
         ;;
     -d|--delete)
         DELETE_VOLS=true
