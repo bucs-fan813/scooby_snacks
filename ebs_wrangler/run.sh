@@ -253,7 +253,7 @@ function generateReport {
     # FIXME: Why cant I set AWS_PARTITION from isAuthenticated? Functions doent always bring in global scoped vars?
     local AWS_PARTITION=$(aws sts get-caller-identity --query "Arn" --output text 2> /dev/null | cut -d':' -f2)
     for NEEDLE in "${!HAYSTACK[@]}"; do
-        echo -en "Assuming ${WHITE}${BOLD}arn:${AWS_PARTITION}:iam::${NEEDLE}:role/${ASSUME_ROLE_NAME}${NC} for AWS Account: ${BLUE}${NEEDLE}... "
+        echo -en "Assuming ${WHITE}${BOLD}arn:${AWS_PARTITION}:iam::${NEEDLE}:role/${ASSUME_ROLE_NAME}${NC} for AWS Account: ${BLUE}${NEEDLE}${NC}... "
 
         local CREDENTIALS=$(aws sts assume-role \
             --role-arn "arn:${AWS_PARTITION}:iam::${NEEDLE}:role/${ASSUME_ROLE_NAME}" \
@@ -294,7 +294,7 @@ function generateReport {
 spinner() {
     [[ $HAS_RESULTS == true ]] && return
 	let i=$1
-	local sp="◐◓◑◒"
+	local sp="-\|/"
     # NOTE: https://unix.stackexchange.com/questions/225179/display-spinner-while-waiting-for-some-process-to-finish
 	printf "\b${sp:i++%${#sp}:1}"
     # sleep 0.1
