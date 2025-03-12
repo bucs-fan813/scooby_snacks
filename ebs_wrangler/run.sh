@@ -37,8 +37,8 @@ COLUMNS=${COLUMNS:-$(tput cols)}
 
 # checkPrerequisites Checks credentials and connectivity to K8S cluster
 function checkPrerequisites {
-    echo -n "SUDO check: "
-    [[ $(checkSudo) == true ]] && echo -e "${GREEN}Passed!${NC}" || { echo -e "${RED}Failed! ${GRAY}(Please use \"sudo\" or run as root)${NC} "; exit 1; }
+    echo -n "Root context check: "
+    [[ $(isRoot) == true ]] && echo -e "${GREEN}Passed!${NC}" || { echo -e "${RED}Failed! ${GRAY}(Please use \"sudo\" or run as root)${NC} "; exit 1; }
     echo -n "AWS credentials check: "
     [[ $(isAuthenticated) == true ]] && echo -e "${GREEN}Passed!${NC}" || { echo -e "${RED}Failed! ${GRAY}(Check ~/.aws/credentials or ENVs)${NC} "; exit 1; }
     echo -n "Kubeconfig check: "
@@ -53,22 +53,22 @@ function checkPrerequisites {
     [[ $(hasCluster) == true ]] && echo -e "${GREEN}Passed!${NC}" || { echo -e "${RED}Houston we have a problem! ${GRAY}(Are you sure your connections are setup correctly?)${NC}"; exit 1; }
 }
 
-# checkSudo Check for sudo or root on linux
-function checkSudo {
-[[ "$EUID" -eq 0 ]]	&& echo true || echo false
+# isRoot Check for sudo or root context
+function isRoot {
+    [[ "$EUID" -eq 0 ]]	&& echo true || echo false
 }
 
 # isAuthenticated (bool) Checks to see if valid AWS credentials are available
 function isAuthenticated {
-    aws sts get-caller-identity --query "Arn" --output text > /dev/null 2>&1 && echo true || echo false
+    aws sts get-caller-identity > /dev/null 2>&1 && echo true || echo false
 }
 
-# excludeNamespaces Formats a comma-delimited string of values. EXCLUDE_NAMESPACES will contain the values need to exlude namespaces from the report using the kubectl --field-selector
+# excludeNamespaces Formats a comma separated string of values. EXCLUDE_NAMESPACES will contain the values to exclude from kubectl --field-selector
 function excludeNamespaces {
-        local input=$1
-        [[ -n $input ]] || { echo -e "${RED}At least one namespace must be provided when using -e|--exclude${NC}"; exit 1; }
-        # Prepend metadata.namespace!= to each item in the list
-        EXCLUDE_NAMESPACES=$(echo "$input" | sed 's/,/ metadata.namespace!=/g' | sed 's/^/metadata.namespace!=/')
+    local input=$1
+    [[ -n $input ]] || { echo -e "${RED}At least one namespace must be provided when using -e|--exclude${NC}"; exit 1; }
+    # Prepend metadata.namespace!= to each item in the list
+    EXCLUDE_NAMESPACES=$(echo "$input" | sed 's/,/ metadata.namespace!=/g' | sed 's/^/metadata.namespace!=/')
 }
 
 # hasCluster Checks (bool) to see if K8S cluster is available
@@ -314,7 +314,7 @@ cat << EOF
 Usage: $0 [options]
 EBS Wrangler features:
 	o Checks all pre-requesites are satisfied to run $0
-	o Gathers K8S Pods that contain AWS account info for management and tenants
+	o Gathers K8S Pods that contain AWS account info for management and/or tenants
 	o Gathers and reports unattached EBS volume data and costs
 	o Deletes unattached EBS volumes
 
@@ -322,7 +322,7 @@ EBS Wrangler features:
 	None.
 
 	OPTIONS
-${TAB} -d|--delete ${TAB} Delete the volumes found by shown in the report (remove --dry-run from deleteEbsVolumes() after all environment have been tested)
+${TAB} -d|--delete ${TAB} Delete the volumes shown in the report (remove --dry-run from deleteEbsVolumes() after all environments have been tested)
 ${TAB} -h|--help ${TAB} Display usage help.
 ${TAB} -t|--tennants ${TAB} Include tenant pods/accounts in the report.
 ${TAB} -v|--debug ${TAB} Display debugging info with output
