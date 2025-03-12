@@ -51,7 +51,7 @@ function checkPrerequisites {
     echo -n "SSH tunnel check: "
     [[ $(hasSSHTunnel) == true ]] && echo -e "${GREEN}Passed!${NC}" || { echo -e "${YELLOW}Skipped${NC}"; }
     echo -n "kubectl commands check: "
-    [[ $(hasCluster) == true ]] && echo -e "${GREEN}Passed!${NC}" || { echo -e "${RED}Houston we have a problem! ${GRAY}(Are you sure your connections are setup correctly?)${NC}"; exit 1; }
+    [[ $(hasCluster) == true ]] && echo -e "${GREEN}Passed!${NC}" || { echo -e "${RED}Houston we have a problem! ${GRAY}(Are you sure your connections and AWS credentials are setup correctly?)${NC}"; exit 1; }
 }
 
 # isRoot Check for sudo or root context
