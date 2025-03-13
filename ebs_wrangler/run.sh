@@ -323,11 +323,11 @@ ${TAB}MANDATORY PARAMETERS
 ${TAB}None.
 
 ${TAB}OPTIONS
-${TAB}  -d|--delete ${TAB} Delete the volumes shown in the report (remove --dry-run from deleteEbsVolumes() after all environments have been tested)
-${TAB}  -i|--ingress ${TAB} Display usage help.
-${TAB}  -h|--help ${TAB} Display usage help.
-${TAB}  -t|--tennants ${TAB} Include tenant pods/accounts in the report.
-${TAB}  -v|--debug ${TAB} Display debugging info with output
+${TAB}-d|--delete ${TAB}Delete the volumes shown in the report (remove --dry-run from deleteEbsVolumes() after all environments have been tested)
+${TAB}-i|--ingress ${TAB}Display usage help.
+${TAB}-h|--help ${TAB}Display usage help.
+${TAB}-t|--tennants ${TAB}Include tenant pods/accounts in the report.
+${TAB}-v|--debug ${TAB}Display debugging info with output
 EOF
 }
 
