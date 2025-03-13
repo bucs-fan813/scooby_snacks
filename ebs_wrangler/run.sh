@@ -19,7 +19,7 @@ declare DELETE_VOLS=false                           # Boolean
 declare INCLUDE_TENANTS=false                       # Boolean
 
 # Future use
-declare EXCLUDE_NAMESPACES                          # Sting (comma separated)
+declare EXCLUDE_NAMESPACES                          # String (comma separated)
 declare INGRESS_ENDPOINT                            # String
 # declare -r REGION=$(aws configure list | grep region | awk '{print $2}')
 
@@ -69,7 +69,7 @@ function excludeNamespaces {
     local input=$1
     [[ -n $input ]] || { echo -e "${RED}At least one namespace must be provided when using -e|--exclude${NC}"; exit 1; }
     # Prepend metadata.namespace!= to each item in the list
-    EXCLUDE_NAMESPACES=$(echo "$input" | sed 's/,/ metadata.namespace!=/g' | sed 's/^/metadata.namespace!=/')
+    EXCLUDE_NAMESPACES=$(sed 's/,/ metadata.namespace!=/g' <<< "$input" | sed 's/^/metadata.namespace!=/')
 }
 
 # hasCluster Checks (bool) to see if K8S cluster is available
@@ -175,7 +175,7 @@ function fetchEbsVolumes {
         ACCOUNT_EBS_VOL_IDS+=($volume_id)
         ALL_EBS_VOL_IDS+=($volume_id)
     # NOTE: Don't use piping or subshells with while loop
-    done < <(echo "$json_data" | jq -r '.[] | @tsv')
+    done < <(jq -r '.[] | @tsv' <<< "$json_data")
 
     # Print summation row and update globals
     account_cost=$(awk 'BEGIN { print int(ARGV[1] * 0.1) }' "$account_size")
@@ -185,7 +185,7 @@ function fetchEbsVolumes {
 
     # Print table footer
     printf "%*s\n" "$COLUMNS" "" | tr " " "="
-    printf "Sub-total: %s volumes\t\t\t %d GB\t\t\tCost: \$%d/month\n" "$count" "$account_size" "$account_cost"
+    printf "${WHITE}${BOLD}Account# %s Sub-total:\t\tUnattached EBS Volumes:${NC} %s\t\t\t\t${WHITE}${BOLD}Size:${NC} %d GB\t\t\t\t${WHITE}${BOLD}Cost:${NC} \$%d/month ${GRAY}(@ \$0.10/GB)${NC}\n" "$ACCOUNT" "$count" "$account_size" "$account_cost"
 }
 
 # fetchPods Gets the list of namespaces and pod names
@@ -196,6 +196,7 @@ function fetchPods {
     
     printf $CURSOR_OFF
     echo -en "Fetching pods from: ${BLUE}${BOLD}${CLUSTER_NAME}${NC} ${GRAY}(${CLUSTER_ARN})${NC}... "
+
     [[ $INCLUDE_TENANTS == false ]] && { excludeNamespaces 'tenants'; echo -e "${YELLOW}Excluding tenants!${NC}"; } || echo -e "${BLUE}Including tenants!${NC}"
     # Get the list of namespaces and pod names (kubectl get pods -A --no-headers -o custom-columns="Namespace:metadata.namespace,Pod:metadata.name")
     while read -r NAMESPACE POD; do
@@ -212,11 +213,11 @@ function fetchPods {
             fi
 
             # Extract ACCOUNT from either `ACCOUNT` or `AWS_ROLE_ARN`
-            AWS_ACCOUNT=$(echo "$ENVS" | grep -E '^ACCOUNT=' | cut -d= -f2)
+            AWS_ACCOUNT=$(grep -E '^ACCOUNT=' <<< "$ENVS" | cut -d= -f2)
             if [[ -z "$AWS_ACCOUNT" ]]; then
-                AWS_ROLE_ARN=$(echo "$ENVS" | grep -E '^AWS_ROLE_ARN=' | cut -d= -f2)
+                AWS_ROLE_ARN=$(grep -E '^AWS_ROLE_ARN=' <<< "$ENVS" | cut -d= -f2)
                 if [[ -n "$AWS_ROLE_ARN" ]]; then
-                    AWS_ACCOUNT=$(echo "$AWS_ROLE_ARN" | sed -E 's/.*:([0-9]{12}):.*/\1/')
+                    AWS_ACCOUNT=$(sed -E 's/.*:([0-9]{12}):.*/\1/' <<< "$AWS_ROLE_ARN")
                 else
                     spinner $i
                     continue
@@ -287,7 +288,7 @@ function generateReport {
 
     # Print table footer
     printf "%*s\n" "$COLUMNS" "" | tr " " "="
-    printf "${WHITE}${BOLD}Number of Accounts:${NC} %d\t\t\t ${WHITE}${BOLD}Number of unattached EBS Volumes:${NC} %d \t\t\t ${WHITE}${BOLD}Total Size:${NC} %d GB \t\t\t ${WHITE}${BOLD}Total Cost:${NC} \$%d/month ${GRAY}(@ \$0.10/GB)${NC}\n" "${#HAYSTACK[@]}" "$TOTAL_COUNT" "$TOTAL_SIZE" "$TOTAL_COST"
+    printf "${WHITE}${BOLD}Total Number of Accounts:${NC} %d\t\t\t${WHITE}${BOLD}Total Unattached EBS Volumes:${NC} %d\t\t\t${WHITE}${BOLD}Total Size:${NC} %d GB\t\t\t${WHITE}${BOLD}Total Cost:${NC} \$%d/month ${GRAY}(@ \$0.10/GB)${NC}\n" "${#HAYSTACK[@]}" "$TOTAL_COUNT" "$TOTAL_SIZE" "$TOTAL_COST"
     echo "${#ALL_EBS_VOL_IDS[@]} Volumes will be deleted: [${ALL_EBS_VOL_IDS[@]}]" > /dev/null 2>&1
 }
 
