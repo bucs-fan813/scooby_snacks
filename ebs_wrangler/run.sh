@@ -288,6 +288,7 @@ function generateReport {
     # Print table footer
     printf "%*s\n" "$COLUMNS" "" | tr " " "="
     printf "${WHITE}${BOLD}Number of Accounts:${NC} %d\t\t\t ${WHITE}${BOLD}Number of unattached EBS Volumes:${NC} %d \t\t\t ${WHITE}${BOLD}Total Size:${NC} %d GB \t\t\t ${WHITE}${BOLD}Total Cost:${NC} \$%d/month ${GRAY}(@ \$0.10/GB)${NC}\n" "${#HAYSTACK[@]}" "$TOTAL_COUNT" "$TOTAL_SIZE" "$TOTAL_COST"
+    echo "${#ALL_EBS_VOL_IDS[@]} Volumes will be deleted: [${ALL_EBS_VOL_IDS[@]}]" > /dev/null 2>&1
 }
 
 # Cause why not!?!
@@ -304,7 +305,6 @@ function main {
     checkPrerequisites
     fetchPods
     generateReport
-    echo "${BOLD}${WHITE}${#ALL_EBS_VOL_IDS[@]} Volumes will be deleted: [${ALL_EBS_VOL_IDS[@]}]${NC}" > /dev/null 2>&1
 }
 
 # usage Displays help
@@ -314,20 +314,20 @@ TAB=$'\t'
 cat << EOF
 Usage: $0 [options]
 EBS Wrangler features:
-	o Checks all pre-requesites are satisfied to run $0
-	o Gathers K8S Pods that contain AWS account info for management and/or tenants
-	o Gathers and reports unattached EBS volume data and costs
-	o Deletes unattached EBS volumes
+${TAB}o Checks all pre-requesites are satisfied to run $0
+${TAB}o Gathers K8S Pods that contain AWS account info for management and/or tenants
+${TAB}o Gathers and reports unattached EBS volume data and costs
+${TAB}o Deletes unattached EBS volumes
 
-	MANDATORY PARAMETERS
-	None.
+${TAB}MANDATORY PARAMETERS
+${TAB}None.
 
-	OPTIONS
-${TAB} -d|--delete ${TAB} Delete the volumes shown in the report (remove --dry-run from deleteEbsVolumes() after all environments have been tested)
-${TAB} -i|--ingress ${TAB} Display usage help.
-${TAB} -h|--help ${TAB} Display usage help.
-${TAB} -t|--tennants ${TAB} Include tenant pods/accounts in the report.
-${TAB} -v|--debug ${TAB} Display debugging info with output
+${TAB}OPTIONS
+${TAB}  -d|--delete ${TAB} Delete the volumes shown in the report (remove --dry-run from deleteEbsVolumes() after all environments have been tested)
+${TAB}  -i|--ingress ${TAB} Display usage help.
+${TAB}  -h|--help ${TAB} Display usage help.
+${TAB}  -t|--tennants ${TAB} Include tenant pods/accounts in the report.
+${TAB}  -v|--debug ${TAB} Display debugging info with output
 EOF
 }
 
