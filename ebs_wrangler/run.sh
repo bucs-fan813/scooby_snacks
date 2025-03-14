@@ -108,7 +108,7 @@ function hasSSHConnection {
     local PROCESS=$(awk '{ print $7 }' <<< $NETSTAT)
     local SSH_SERVER_FQDN=$(getent hosts $SSH_SERVER_ADDRESS | tr -s ' ' | cut -d " " -f2) 
     # Only show for --debug
-    echo "SSH connection ${STATUS} to ${SSH_SERVER_ADDRESS} (${SSH_SERVER_FQDN}) on ${PROTO}/${SSH_SERVER_PORT}" > /dev/null 2>&1
+    (>/dev/null echo "SSH connection ${STATUS} to ${SSH_SERVER_ADDRESS} (${SSH_SERVER_FQDN}) on ${PROTO}/${SSH_SERVER_PORT}")
     echo true
 }
 
@@ -122,8 +122,8 @@ function hasSSHTunnel {
     local SSH_TUNNEL_PORT=$(awk '{ print $4 }' <<< $NETSTAT | cut -d ":" -f2)
     local STATUS=$(awk '{ print $6 }' <<< $NETSTAT)
     local PROCESS=$(awk '{ print $7 }' <<< $NETSTAT)
-    # Only show for --debug
-    echo "SSH connection ${STATUS} to ${SSH_SERVER_ADDRESS} on ${PROTO}/${SSH_SERVER_PORT}" > /dev/null 2>&1
+    # Only show when --debug is used
+    (>/dev/null echo "SSH connection ${STATUS} to ${SSH_SERVER_ADDRESS} on ${PROTO}/${SSH_SERVER_PORT}")
     echo true
 }
 
@@ -138,14 +138,17 @@ function hasVPNConnection {
 # deleteEbsVolumes Deletes EBS volumes discovered by fetchEbsVolumes
 function deleteEbsVolumes {
     for VOLUME in "${ACCOUNT_EBS_VOL_IDS[@]}"; do
-        aws ec2 delete-volume --volume-id $VOLUME --dry-run 2>/dev/null
+        # aws ec2 delete-volume --volume-id $VOLUME 2>/dev/null             # TODO: Uncomment this line before deploying to workstation
+        aws ec2 delete-volume --volume-id $VOLUME --dry-run 2>/dev/null     # TODO: Remove this line when development is complete
     done
 }
 
 # fetchEbsVolumes gets the EBS volume data for the account
 function fetchEbsVolumes {
-    local ACCOUNT=$1 # For future use
-    ACCOUNT_EBS_VOL_IDS=() # Reset array
+    local ACCOUNT=$1
+    ACCOUNT_EBS_VOL_IDS=() # Reset array for each account
+
+    # FIXME: Determine query needed
     # Query unattached volumes 
     local json_data=$(aws ec2 describe-volumes --query 'sort_by(Volumes[?State==`available`],&CreateTime)[].[VolumeId,State,VolumeType,AvailabilityZone,CreateTime,Size]' --output json)
     # Query unattached volumes with `ebs.csi.aws.com/cluster` tag
@@ -289,7 +292,7 @@ function generateReport {
     # Print table footer
     printf "%*s\n" "$COLUMNS" "" | tr " " "="
     printf "${WHITE}${BOLD}Total Number of Accounts:${NC} %d\t\t\t${WHITE}${BOLD}Total Unattached EBS Volumes:${NC} %d\t\t\t${WHITE}${BOLD}Total Size:${NC} %d GB\t\t\t${WHITE}${BOLD}Total Cost:${NC} \$%d/month ${GRAY}(@ \$0.10/GB)${NC}\n" "${#HAYSTACK[@]}" "$TOTAL_COUNT" "$TOTAL_SIZE" "$TOTAL_COST"
-    echo "${#ALL_EBS_VOL_IDS[@]} Volumes will be deleted: [${ALL_EBS_VOL_IDS[@]}]" > /dev/null 2>&1
+    (>/dev/null echo "${#ALL_EBS_VOL_IDS[@]} Volumes will be deleted: [${ALL_EBS_VOL_IDS[@]}]")
 }
 
 # Cause why not!?!
