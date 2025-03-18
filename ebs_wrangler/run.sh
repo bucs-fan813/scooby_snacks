@@ -16,6 +16,7 @@ declare -i TOTAL_COUNT TOTAL_SIZE TOTAL_COST        # Integers
 declare -r ASSUME_ROLE_NAME='SERVADMIN'             # Read-only
 declare HAS_RESULTS=false                           # Boolean
 declare DELETE_VOLS=false                           # Boolean
+declare CREATE_SNAPSHOTS=true                       # Boolean
 declare INCLUDE_TENANTS=false                       # Boolean
 
 # Future use
@@ -45,11 +46,11 @@ function checkPrerequisites {
     echo -n "Kubeconfig check: "
     [[ $(hasKubeconfig) == true ]] && echo -e "${GREEN}Passed!${NC}" || { echo -e "${RED}Failed! ${GRAY}(Check ~/.kube/config)${NC}"; exit 1; }
     echo -n "VPN Connection check: "
-    [[ $(hasVPNConnection $INGRESS_ENDPOINT) == true ]] && echo -e "${GREEN}Passed! ${GRAY}(or skipped)${NC}" || { echo -e "${YELLOW}Skipped${NC}"; }
+    [[ $(hasVPNConnection $INGRESS_ENDPOINT) == true ]] && echo -e "${GREEN}Passed! ${GRAY}(or skipped)${NC}" || echo -e "${YELLOW}Skipped${NC}"
     echo -n "Jumpbox Connection check: "
-    [[ $(hasSSHConnection) == true ]] && echo -e "${GREEN}Passed!${NC}" || { echo -e "${YELLOW}Skipped${NC}"; }
+    [[ $(hasSSHConnection) == true ]] && echo -e "${GREEN}Passed!${NC}" || echo -e "${YELLOW}Skipped${NC}"
     echo -n "SSH tunnel check: "
-    [[ $(hasSSHTunnel) == true ]] && echo -e "${GREEN}Passed!${NC}" || { echo -e "${YELLOW}Skipped${NC}"; }
+    [[ $(hasSSHTunnel) == true ]] && echo -e "${GREEN}Passed!${NC}" || echo -e "${YELLOW}Skipped${NC}"
     echo -n "kubectl commands check: "
     [[ $(hasCluster) == true ]] && echo -e "${GREEN}Passed!${NC}" || { echo -e "${RED}Houston we have a problem! ${GRAY}(Are you sure your connections and AWS credentials are setup correctly?)${NC}"; exit 1; }
 }
@@ -107,7 +108,7 @@ function hasSSHConnection {
     local STATUS=$(awk '{ print $6 }' <<< $NETSTAT)
     local PROCESS=$(awk '{ print $7 }' <<< $NETSTAT)
     local SSH_SERVER_FQDN=$(getent hosts $SSH_SERVER_ADDRESS | tr -s ' ' | cut -d " " -f2) 
-    # Only show for --debug
+    # Only show when --debug is used
     (>/dev/null echo "SSH connection ${STATUS} to ${SSH_SERVER_ADDRESS} (${SSH_SERVER_FQDN}) on ${PROTO}/${SSH_SERVER_PORT}")
     echo true
 }
@@ -135,11 +136,32 @@ function hasVPNConnection {
     timeout 0.5s bash -c "echo -n 2>/dev/null < /dev/tcp/${HOST_NAME}/${HOST_PORT}" && echo true || echo false
 }
 
+# createSnapshot Deletes EBS volumes discovered by fetchEbsVolumes
+function createSnapshot {
+    [[ -n $1 ]] && { echo -e "${RED}Missing EBS Volume ID!${NC} "; exit 1; }
+    local VOLUME=$1
+    [[ $CREATE_SNAPSHOTS == true ]] && createSnapshot "${VOLUME}"
+}
+
 # deleteEbsVolumes Deletes EBS volumes discovered by fetchEbsVolumes
 function deleteEbsVolumes {
     for VOLUME in "${ACCOUNT_EBS_VOL_IDS[@]}"; do
-        # aws ec2 delete-volume --volume-id $VOLUME 2>/dev/null             # TODO: Uncomment this line before deploying to workstation
-        aws ec2 delete-volume --volume-id $VOLUME --dry-run 2>/dev/null     # TODO: Remove this line when development is complete
+        [[ $CREATE_SNAPSHOTS == true ]] && aws ec2 create-snapshot --volume-id "${VOLUME}" --description "Created by EBS Wrangler for ${VOLUME}"
+
+        # Get Persistent Volumes and their volumeHandle (EBS Volume IDs)
+        PV=$(kubectl get pv -A --no-headers -o custom-columns="PersistentVolume:metadata.name,PersistentVolume:spec.csi.volumeHandle" | grep ${VOLUME})
+
+        # Check to see if the cluster is aware of the EBS volume and delete by changing the K8S ReclaimPolicy.
+        if [ -n ${PV} ]; then
+            PV_NAME=$(awk '{ print $1 }' <<< $PV)
+            # PV_VOL_HANDLE=$(awk '{ print $2 }' <<< $PV)
+            # kubectl patch pv ${PV_NAME} -p '{"spec":{"persistentVolumeReclaimPolicy":"Delete"}}'                              # TODO: Uncomment this line before deploying to workstation
+            kubectl patch pv ${PV_NAME} -p '{"spec":{"persistentVolumeReclaimPolicy":"Delete"}}' --dry-run=client -o yaml       # TODO: Remove this line when development is complete
+        else
+            # Only use the  or AWS CLI if the K8S cluster is unaware of the volume
+            # aws ec2 delete-volume --volume-id $VOLUME 2>/dev/null                                                             # TODO: Uncomment this line before deploying to workstation
+            aws ec2 delete-volume --volume-id $VOLUME --dry-run 2>/dev/null                                                     # TODO: Remove this line when development is complete
+        fi
     done
 }
 
@@ -215,7 +237,7 @@ function fetchPods {
                 continue
             fi
 
-            # Extract ACCOUNT from either `ACCOUNT` or `AWS_ROLE_ARN`
+            # Extract AWS ACCOUNT from either `ENVS[ACCOUNT]` or `ENVS[AWS_ROLE_ARN]`
             AWS_ACCOUNT=$(grep -E '^ACCOUNT=' <<< "$ENVS" | cut -d= -f2)
             if [[ -z "$AWS_ACCOUNT" ]]; then
                 AWS_ROLE_ARN=$(grep -E '^AWS_ROLE_ARN=' <<< "$ENVS" | cut -d= -f2)
@@ -261,7 +283,7 @@ function generateReport {
 
         local CREDENTIALS=$(aws sts assume-role \
             --role-arn "arn:${AWS_PARTITION}:iam::${NEEDLE}:role/${ASSUME_ROLE_NAME}" \
-            --role-session-name "VOL_CHECKUP" 2>/dev/null)
+            --role-session-name "${NEEDLE}_${VOL_CHECKUP}" 2>/dev/null)
         
         if [[ -z "$CREDENTIALS" ]]; then
             echo -e "${RED}Failed!${NC}"
@@ -292,6 +314,7 @@ function generateReport {
     # Print table footer
     printf "%*s\n" "$COLUMNS" "" | tr " " "="
     printf "${WHITE}${BOLD}Total Number of Accounts:${NC} %d\t\t\t${WHITE}${BOLD}Total Unattached EBS Volumes:${NC} %d\t\t\t${WHITE}${BOLD}Total Size:${NC} %d GB\t\t\t${WHITE}${BOLD}Total Cost:${NC} \$%d/month ${GRAY}(@ \$0.10/GB)${NC}\n" "${#HAYSTACK[@]}" "$TOTAL_COUNT" "$TOTAL_SIZE" "$TOTAL_COST"
+    # Only show when --debug is used
     (>/dev/null echo "${#ALL_EBS_VOL_IDS[@]} Volumes will be deleted: [${ALL_EBS_VOL_IDS[@]}]")
 }
 
@@ -327,17 +350,18 @@ ${TAB}MANDATORY PARAMETERS
 ${TAB}None.
 
 ${TAB}OPTIONS
-${TAB}-d|--delete ${TAB}Delete the volumes shown in the report (remove --dry-run from deleteEbsVolumes() after all environments have been tested)
-${TAB}-i|--ingress ${TAB}Display usage help.
+${TAB}-d|--delete ${TAB}Delete the volumes shown in the report. (remove --dry-run from deleteEbsVolumes() after all environments have been tested)
+${TAB}-i|--ingress ${TAB}Specify the ingress point (ELB) of the environment. (this is ignored when running from within the VPC, ie: workstation)
 ${TAB}-h|--help ${TAB}Display usage help.
-${TAB}-t|--tennants ${TAB}Include tenant pods/accounts in the report.
-${TAB}-v|--debug ${TAB}Display debugging info with output
+${TAB}-n|--no-snapshots ${TAB}Don't create snapshots of volumes (snapshots created by default).
+${TAB}-t|--tenants ${TAB}Include tenant pods/accounts in the report.
+${TAB}-v|--debug ${TAB}Display debugging info with output.
 EOF
 }
 
 # Entry Point
-GETOPT=`getopt -n $0 -o ,h,d,v,t,t \
-    -l help,delete,debug,tenants,ingress`
+GETOPT=`getopt -n $0 -o ,h,d,v,t,t,n \
+    -l help,delete,debug,tenants,ingress,no-snapshots`
 #eval set -- "$GETOPT"
 while true;
 do
@@ -356,6 +380,10 @@ do
         ;;
     -d|--delete)
         DELETE_VOLS=true
+        break
+        ;;
+    -n|--no-snapshots)
+        CREATE_SNAPSHOTS=false
         break
         ;;
     -v|--debug)
