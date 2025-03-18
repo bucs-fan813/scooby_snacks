@@ -138,23 +138,28 @@ function hasVPNConnection {
 
 # createSnapshot Deletes EBS volumes discovered by fetchEbsVolumes
 function createSnapshot {
-    [[ -n $1 ]] && { echo -e "${RED}Missing EBS Volume ID!${NC} "; exit 1; }
+    [[ -z $1 ]] && { echo -e "${RED}Missing EBS Volume ID!${NC} "; exit 1; }
     local VOLUME=$1
-    [[ $CREATE_SNAPSHOTS == true ]] && createSnapshot "${VOLUME}"
+    aws ec2 create-snapshot \
+    --volume-id "${VOLUME}" \
+    --description "Created by EBS Wrangler for ${VOLUME}"
+
+    # --tag-specifications 'ResourceType=snapshot,Tags=[{Key=foo,Value=bar},{Key=fizz,Value=buzz}]' # future use
 }
 
 # deleteEbsVolumes Deletes EBS volumes discovered by fetchEbsVolumes
 function deleteEbsVolumes {
     for VOLUME in "${ACCOUNT_EBS_VOL_IDS[@]}"; do
-        [[ $CREATE_SNAPSHOTS == true ]] && aws ec2 create-snapshot --volume-id "${VOLUME}" --description "Created by EBS Wrangler for ${VOLUME}"
-
+        # Create snapshots before deleting (default)
+        [[ $CREATE_SNAPSHOTS == true ]] && createSnapshot "${VOLUME}"
+        
         # Get Persistent Volumes and their volumeHandle (EBS Volume IDs)
         PV=$(kubectl get pv -A --no-headers -o custom-columns="PersistentVolume:metadata.name,PersistentVolume:spec.csi.volumeHandle" | grep ${VOLUME})
 
         # Check to see if the cluster is aware of the EBS volume and delete by changing the K8S ReclaimPolicy.
-        if [ -n ${PV} ]; then
+        if [[ -n ${PV} ]]; then
             PV_NAME=$(awk '{ print $1 }' <<< $PV)
-            # PV_VOL_HANDLE=$(awk '{ print $2 }' <<< $PV)
+            # PV_VOL_HANDLE=$(awk '{ print $2 }' <<< $PV) # future use
             # kubectl patch pv ${PV_NAME} -p '{"spec":{"persistentVolumeReclaimPolicy":"Delete"}}'                              # TODO: Uncomment this line before deploying to workstation
             kubectl patch pv ${PV_NAME} -p '{"spec":{"persistentVolumeReclaimPolicy":"Delete"}}' --dry-run=client -o yaml       # TODO: Remove this line when development is complete
         else
@@ -350,12 +355,12 @@ ${TAB}MANDATORY PARAMETERS
 ${TAB}None.
 
 ${TAB}OPTIONS
-${TAB}-d|--delete ${TAB}Delete the volumes shown in the report. (remove --dry-run from deleteEbsVolumes() after all environments have been tested)
-${TAB}-i|--ingress ${TAB}Specify the ingress point (ELB) of the environment. (this is ignored when running from within the VPC, ie: workstation)
-${TAB}-h|--help ${TAB}Display usage help.
+${TAB}-d|--delete ${TAB}${TAB}Delete the volumes shown in the report. (remove --dry-run from deleteEbsVolumes() after all environments have been tested)
+${TAB}-i|--ingress ${TAB}${TAB}Specify the ingress point (ELB) of the environment. (this is ignored when running from within the VPC, ie: workstation)
+${TAB}-h|--help ${TAB}${TAB}Display usage help.
 ${TAB}-n|--no-snapshots ${TAB}Don't create snapshots of volumes (snapshots created by default).
-${TAB}-t|--tenants ${TAB}Include tenant pods/accounts in the report.
-${TAB}-v|--debug ${TAB}Display debugging info with output.
+${TAB}-t|--tenants ${TAB}${TAB}Include tenant pods/accounts in the report.
+${TAB}-v|--debug ${TAB}${TAB}Display debugging info with output.
 EOF
 }
 
@@ -363,6 +368,7 @@ EOF
 GETOPT=`getopt -n $0 -o ,h,d,v,t,t,n \
     -l help,delete,debug,tenants,ingress,no-snapshots`
 #eval set -- "$GETOPT"
+# FIXME: Support more than one parameter; ie: ./ebs_wrangler.sh -dv -i somewhere.com
 while true;
 do
     case "$1" in
@@ -400,4 +406,5 @@ do
         ;;
     esac
 done
+set -x
 main
