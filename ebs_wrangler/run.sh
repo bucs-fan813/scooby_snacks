@@ -136,15 +136,48 @@ function hasVPNConnection {
     timeout 0.5s bash -c "echo -n 2>/dev/null < /dev/tcp/${HOST_NAME}/${HOST_PORT}" && echo true || echo false
 }
 
+# createDLMPolicy Deletes EBS volumes discovered by fetchEbsVolumes
+function createDLMPolicy {
+    # Check if DLM Policy for EBS Wrangler already exists
+    if aws dlm get-lifecycle-policies --output text | ! grep -q "EBS Wrangler"; then
+        return 
+    fi
+    local ACCOUNT=$1
+    local AWS_PARTITION=$(aws sts get-caller-identity --query "Arn" --output text 2> /dev/null | cut -d':' -f2)
+    
+    # https://cloud.google.com/scheduler/docs/configuring/cron-job-schedules#sample_schedules
+    aws dlm create-lifecycle-policy --execution-role-arn "arn:${AWS_PARTITION}:iam::${ACCOUNT}:role/${ASSUME_ROLE_NAME}" \
+    --description "EBS Wrangler - Move snapshots to archive after 90 days and delete after 1 year" \
+    --state ENABLED \
+    --policy-details '{
+    "PolicyType": "EBS_SNAPSHOT_MANAGEMENT",
+    "ResourceTypes": ["VOLUME"],
+    "TargetTags": [{"Key": "CreatedBy", "Value": "EBS Wrangler"}],
+    "Schedules": [{
+        "Name": "EBS Wrangler",
+        "CopyTags": true,
+        "TagsToAdd": [{"Key":"ManagedBy","Value":"dlm"}],
+        "CreateRule": {
+            "CronExpression": "cron(0 0 1 1,4,7,10 ? *)"
+        },
+        "RetainRule": {"Interval": 90, "IntervalUnit": "DAYS"},
+        "ArchiveRule": {
+            "RetainRule":{ 
+                "RetentionArchiveTier": {"Interval": 365, "IntervalUnit": "DAYS"}
+            }
+        }
+    }]}'
+}
+
 # createSnapshot Deletes EBS volumes discovered by fetchEbsVolumes
 function createSnapshot {
     [[ -z $1 ]] && { echo -e "${RED}Missing EBS Volume ID!${NC} "; exit 1; }
     local VOLUME=$1
+    
     aws ec2 create-snapshot \
     --volume-id "${VOLUME}" \
-    --description "Created by EBS Wrangler for ${VOLUME}"
-
-    # --tag-specifications 'ResourceType=snapshot,Tags=[{Key=foo,Value=bar},{Key=fizz,Value=buzz}]' # future use
+    --description "Created by EBS Wrangler for ${VOLUME}" \
+    --tag-specifications 'ResourceType=snapshot,Tags=[{Key=CreatedBy,Value=EBS Wrangler},{Key=JIRA,Value=NGICAWS-32204}]'
 }
 
 # deleteEbsVolumes Deletes EBS volumes discovered by fetchEbsVolumes
@@ -176,9 +209,11 @@ function fetchEbsVolumes {
     ACCOUNT_EBS_VOL_IDS=() # Reset array for each account
 
     # FIXME: Determine query needed
-    # Query unattached volumes 
-    local json_data=$(aws ec2 describe-volumes --query 'sort_by(Volumes[?State==`available`],&CreateTime)[].[VolumeId,State,VolumeType,AvailabilityZone,CreateTime,Size]' --output json)
-    # Query unattached volumes with `ebs.csi.aws.com/cluster` tag
+    # 1) Query unattached volumes 
+    # local json_data=$(aws ec2 describe-volumes --query "sort_by(Volumes[?State=='available'], &CreateTime)[].[VolumeId, State, VolumeType, AvailabilityZone, CreateTime, Size]" --output json)
+    # 2) Query unattached volumes older than 1 year
+    local json_data=$(aws ec2 describe-volumes --query "sort_by(Volumes[?State=='available' && CreateTime<=\`$(date -u -d '1 year ago' +%Y-%m-%dT%H:%M:%SZ)\`], &CreateTime)[].[VolumeId, State, VolumeType, AvailabilityZone, CreateTime, Size]" --output json)
+    # 3) Query unattached volumes with `ebs.csi.aws.com/cluster` tag
     # local json_data=$(aws ec2 describe-volumes --filters "Name=status,Values=available" --query 'sort_by(Volumes[?!not_null(Tags[?Key==`ebs.csi.aws.com/cluster`].Value)],&CreateTime)[].[VolumeId,State,VolumeType,AvailabilityZone,CreateTime,Size]' --output json)
 
     # Check if JSON data is empty
@@ -311,6 +346,7 @@ function generateReport {
         echo -e "${GREEN}Success${NC}, Account Alias: ${ACCOUNT_ALIAS}"
         
         fetchEbsVolumes "$NEEDLE"
+        [[ $DELETE_VOLS == true ]] && createDLMPolicy "$NEEDLE"
         [[ $DELETE_VOLS == true ]] && deleteEbsVolumes
         # Clear AWS credentials to avoid roid-rage!
         unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
@@ -406,5 +442,4 @@ do
         ;;
     esac
 done
-set -x
 main
