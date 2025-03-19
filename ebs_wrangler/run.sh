@@ -18,6 +18,7 @@ declare HAS_RESULTS=false                           # Boolean
 declare DELETE_VOLS=false                           # Boolean
 declare CREATE_SNAPSHOTS=true                       # Boolean
 declare INCLUDE_TENANTS=false                       # Boolean
+declare GET_ALL_UNATTACHED=false                    # Boolean
 
 # Future use
 declare EXCLUDE_NAMESPACES                          # String (comma separated)
@@ -139,8 +140,8 @@ function hasVPNConnection {
 # createDLMPolicy Deletes EBS volumes discovered by fetchEbsVolumes
 function createDLMPolicy {
     # Check if DLM Policy for EBS Wrangler already exists
-    if aws dlm get-lifecycle-policies --output text | ! grep -q "EBS Wrangler"; then
-        return 
+    if ! aws dlm get-lifecycle-policies --output text | grep -q "EBS Wrangler"; then
+        return 0
     fi
     local ACCOUNT=$1
     local AWS_PARTITION=$(aws sts get-caller-identity --query "Arn" --output text 2> /dev/null | cut -d':' -f2)
@@ -410,6 +411,10 @@ do
     case "$1" in
     "")
         # Default
+        break
+        ;;
+    -a|--all)
+        GET_ALL_UNATTACHED=true
         break
         ;;
     -h|--help)
