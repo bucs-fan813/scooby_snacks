@@ -194,11 +194,11 @@ function deleteEbsVolumes {
         if [[ -n ${PV} ]]; then
             PV_NAME=$(awk '{ print $1 }' <<< $PV)
             # PV_VOL_HANDLE=$(awk '{ print $2 }' <<< $PV) # future use
-            # kubectl patch pv ${PV_NAME} -p '{"spec":{"persistentVolumeReclaimPolicy":"Delete"}}'                              # TODO: Uncomment this line before deploying to workstation
+            # kubectl patch pv ${PV_NAME} -p '{"spec":{"persistentVolumeReclaimPolicy":"Delete"}}'                              # TODO: Uncomment this line when development is complete
             kubectl patch pv ${PV_NAME} -p '{"spec":{"persistentVolumeReclaimPolicy":"Delete"}}' --dry-run=client -o yaml       # TODO: Remove this line when development is complete
         else
             # Only use the  or AWS CLI if the K8S cluster is unaware of the volume
-            # aws ec2 delete-volume --volume-id $VOLUME 2>/dev/null                                                             # TODO: Uncomment this line before deploying to workstation
+            # aws ec2 delete-volume --volume-id $VOLUME 2>/dev/null                                                             # TODO: Uncomment this line when development is complete
             aws ec2 delete-volume --volume-id $VOLUME --dry-run 2>/dev/null                                                     # TODO: Remove this line when development is complete
         fi
     done
@@ -208,12 +208,14 @@ function deleteEbsVolumes {
 function fetchEbsVolumes {
     local ACCOUNT=$1
     ACCOUNT_EBS_VOL_IDS=() # Reset array for each account
-
-    # FIXME: Determine query needed
-    # 1) Query unattached volumes 
-    # local json_data=$(aws ec2 describe-volumes --query "sort_by(Volumes[?State=='available'], &CreateTime)[].[VolumeId, State, VolumeType, AvailabilityZone, CreateTime, Size]" --output json)
-    # 2) Query unattached volumes older than 1 year
-    local json_data=$(aws ec2 describe-volumes --query "sort_by(Volumes[?State=='available' && CreateTime<=\`$(date -u -d '1 year ago' +%Y-%m-%dT%H:%M:%SZ)\`], &CreateTime)[].[VolumeId, State, VolumeType, AvailabilityZone, CreateTime, Size]" --output json)
+    local json_data
+    if [ "$GET_ALL_UNATTACHED" == true ]; then
+        # Query all unattached volumes 
+        json_data=$(aws ec2 describe-volumes --query "sort_by(Volumes[?State=='available'], &CreateTime)[].[VolumeId, State, VolumeType, AvailabilityZone, CreateTime, Size]" --output json)
+    else
+        # Query unattached volumes older than 1 year
+        json_data=$(aws ec2 describe-volumes --query "sort_by(Volumes[?State=='available' && CreateTime<=\`$(date -u -d '1 year ago' +%Y-%m-%dT%H:%M:%SZ)\`], &CreateTime)[].[VolumeId, State, VolumeType, AvailabilityZone, CreateTime, Size]" --output json)
+    fi
     # 3) Query unattached volumes with `ebs.csi.aws.com/cluster` tag
     # local json_data=$(aws ec2 describe-volumes --filters "Name=status,Values=available" --query 'sort_by(Volumes[?!not_null(Tags[?Key==`ebs.csi.aws.com/cluster`].Value)],&CreateTime)[].[VolumeId,State,VolumeType,AvailabilityZone,CreateTime,Size]' --output json)
 
@@ -392,6 +394,7 @@ ${TAB}MANDATORY PARAMETERS
 ${TAB}None.
 
 ${TAB}OPTIONS
+${TAB}-a|--all ${TAB}${TAB}Report all unattached EBS Volumes. Default behavior is to report EBS Volumes older than 1 year old from today's date.
 ${TAB}-d|--delete ${TAB}${TAB}Delete the volumes shown in the report. (remove --dry-run from deleteEbsVolumes() after all environments have been tested)
 ${TAB}-i|--ingress ${TAB}${TAB}Specify the ingress point (ELB) of the environment. (this is ignored when running from within the VPC, ie: workstation)
 ${TAB}-h|--help ${TAB}${TAB}Display usage help.
