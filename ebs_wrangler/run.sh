@@ -52,6 +52,8 @@ function checkPrerequisites {
     [[ $(hasSSHConnection) == true ]] && echo -e "${GREEN}Passed!${NC}" || echo -e "${YELLOW}Skipped${NC}"
     echo -n "SSH tunnel check: "
     [[ $(hasSSHTunnel) == true ]] && echo -e "${GREEN}Passed!${NC}" || echo -e "${YELLOW}Skipped${NC}"
+    echo -n "Data Lifecycle Manager Check: "
+    [[ $(hasDLMPolicy) == true ]] && echo -e "${GREEN}Passed!${NC}" || echo -e "${YELLOW}DLM is not available with the current credentials ${GRAY}(See: https://docs.aws.amazon.com/cli/latest/reference/dlm/)${NC}"
     echo -n "kubectl commands check: "
     [[ $(hasCluster) == true ]] && echo -e "${GREEN}Passed!${NC}" || { echo -e "${RED}Houston we have a problem! ${GRAY}(Are you sure your connections and AWS credentials are setup correctly?)${NC}"; exit 1; }
 }
@@ -77,6 +79,11 @@ function excludeNamespaces {
 # hasCluster Checks (bool) to see if K8S cluster is available
 function hasCluster {
     kubectl cluster-info > /dev/null 2>&1 && echo true || echo false
+}
+
+# hasDLMPolicy Checks (bool) to see if DLM is available
+function hasDLMPolicy {
+    aws dlm get-lifecycle-policies > /dev/null 2>&1 && echo true || echo false
 }
 
 # hasKubeconfig (bool) Checks to see if kubectl is configured
@@ -140,9 +147,10 @@ function hasVPNConnection {
 # createDLMPolicy Deletes EBS volumes discovered by fetchEbsVolumes
 function createDLMPolicy {
     # Check if DLM Policy for EBS Wrangler already exists
-    if ! aws dlm get-lifecycle-policies --output text | grep -q "EBS Wrangler"; then
+    if aws dlm get-lifecycle-policies --query 'Policies[?Tags.CreatedBy==`EBS Wrangler`].[PolicyId]' > /dev/null 2>&1 ; then
         return 0
     fi
+
     local ACCOUNT=$1
     local AWS_PARTITION=$(aws sts get-caller-identity --query "Arn" --output text 2> /dev/null | cut -d':' -f2)
     
@@ -150,6 +158,7 @@ function createDLMPolicy {
     aws dlm create-lifecycle-policy --execution-role-arn "arn:${AWS_PARTITION}:iam::${ACCOUNT}:role/${ASSUME_ROLE_NAME}" \
     --description "EBS Wrangler - Move snapshots to archive after 90 days and delete after 1 year" \
     --state ENABLED \
+    --tags "CreatedBy=EBS Wrangler" \
     --policy-details '{
     "PolicyType": "EBS_SNAPSHOT_MANAGEMENT",
     "ResourceTypes": ["VOLUME"],
@@ -349,8 +358,7 @@ function generateReport {
         echo -e "${GREEN}Success${NC}, Account Alias: ${ACCOUNT_ALIAS}"
         
         fetchEbsVolumes "$NEEDLE"
-        [[ $DELETE_VOLS == true ]] && createDLMPolicy "$NEEDLE"
-        [[ $DELETE_VOLS == true ]] && deleteEbsVolumes
+        [[ $DELETE_VOLS == true ]] && { createDLMPolicy "$NEEDLE"; deleteEbsVolumes; }
         # Clear AWS credentials to avoid roid-rage!
         unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
     done
@@ -396,8 +404,8 @@ ${TAB}None.
 ${TAB}OPTIONS
 ${TAB}-a|--all ${TAB}${TAB}Report all unattached EBS Volumes. Default behavior is to report EBS Volumes older than 1 year old from today's date.
 ${TAB}-d|--delete ${TAB}${TAB}Delete the volumes shown in the report. (remove --dry-run from deleteEbsVolumes() after all environments have been tested)
-${TAB}-i|--ingress ${TAB}${TAB}Specify the ingress point (ELB) of the environment. (this is ignored when running from within the VPC, ie: workstation)
 ${TAB}-h|--help ${TAB}${TAB}Display usage help.
+${TAB}-i|--ingress ${TAB}${TAB}Specify the ingress point (ELB) of the environment. (this is ignored when running from within the VPC, ie: workstation)
 ${TAB}-n|--no-snapshots ${TAB}Don't create snapshots of volumes (snapshots created by default).
 ${TAB}-t|--tenants ${TAB}${TAB}Include tenant pods/accounts in the report.
 ${TAB}-v|--debug ${TAB}${TAB}Display debugging info with output.
@@ -420,9 +428,14 @@ do
         GET_ALL_UNATTACHED=true
         break
         ;;
+    -c|--check)
+        checkPrerequisites
+        exit 0
+        break
+        ;;
     -h|--help)
         usage
-        exit 1
+        exit 0
         ;;
     -i|--ingress)
         INGRESS_ENDPOINT=$2
