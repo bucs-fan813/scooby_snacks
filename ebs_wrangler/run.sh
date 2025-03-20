@@ -184,7 +184,7 @@ function createSnapshot {
     [[ -z $1 ]] && { echo -e "${RED}Missing EBS Volume ID!${NC} "; exit 1; }
     local VOLUME=$1
     
-    aws ec2 create-snapshot \
+    aws ec2 create-snapshot --dry-run \
     --volume-id "${VOLUME}" \
     --description "Created by EBS Wrangler for ${VOLUME}" \
     --tag-specifications 'ResourceType=snapshot,Tags=[{Key=CreatedBy,Value=EBS Wrangler},{Key=JIRA,Value=NGICAWS-32204}]'
@@ -358,11 +358,11 @@ function generateReport {
         echo -e "${GREEN}Success${NC}, Account Alias: ${ACCOUNT_ALIAS}"
         
         fetchEbsVolumes "$NEEDLE"
-        [[ $DELETE_VOLS == true ]] && { createDLMPolicy "$NEEDLE"; deleteEbsVolumes; }
+
         # Clear AWS credentials to avoid roid-rage!
         unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+        [[ $DELETE_VOLS == true ]] && { createDLMPolicy "$NEEDLE"; deleteEbsVolumes; }
     done
-
     # Print table footer
     printf "%*s\n" "$COLUMNS" "" | tr " " "="
     printf "${WHITE}${BOLD}Total Number of Accounts:${NC} %d\t\t\t${WHITE}${BOLD}Total Unattached EBS Volumes:${NC} %d\t\t\t${WHITE}${BOLD}Total Size:${NC} %d GB\t\t\t${WHITE}${BOLD}Total Cost:${NC} \$%d/month ${GRAY}(@ \$0.10/GB)${NC}\n" "${#HAYSTACK[@]}" "$TOTAL_COUNT" "$TOTAL_SIZE" "$TOTAL_COST"
@@ -403,6 +403,7 @@ ${TAB}None.
 
 ${TAB}OPTIONS
 ${TAB}-a|--all ${TAB}${TAB}Report all unattached EBS Volumes. Default behavior is to report EBS Volumes older than 1 year old from today's date.
+${TAB}-c|--check ${TAB}${TAB}Check credentials and connectivity to K8S cluster.
 ${TAB}-d|--delete ${TAB}${TAB}Delete the volumes shown in the report. (remove --dry-run from deleteEbsVolumes() after all environments have been tested)
 ${TAB}-h|--help ${TAB}${TAB}Display usage help.
 ${TAB}-i|--ingress ${TAB}${TAB}Specify the ingress point (ELB) of the environment. (this is ignored when running from within the VPC, ie: workstation)
