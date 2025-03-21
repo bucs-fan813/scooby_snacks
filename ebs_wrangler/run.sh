@@ -414,25 +414,27 @@ EOF
 }
 
 # Entry Point
-GETOPT=`getopt -n $0 -o ,h,d,v,t,t,n \
-    -l help,delete,debug,tenants,ingress,no-snapshots`
-#eval set -- "$GETOPT"
-# FIXME: Support more than one parameter; ie: ./ebs_wrangler.sh -dv -i somewhere.com
-while true;
-do
+GETOPT=`getopt -o cdhintv \
+    -l check,delete,help,ingress,no-snapshots,tenants,debug: -- "$@"`
+
+# Exit if getopt fails
+if [ $? -ne 0 ]; then
+    echo "Invalid option(s) provided."
+    exit 1
+fi
+echo $GETOPT
+# Parse arguments
+eval set -- "$GETOPT"
+
+while true; do
     case "$1" in
-    "")
-        # Default
-        break
-        ;;
     -a|--all)
         GET_ALL_UNATTACHED=true
-        break
+        shift
         ;;
     -c|--check)
         checkPrerequisites
         exit 0
-        break
         ;;
     -h|--help)
         usage
@@ -440,27 +442,31 @@ do
         ;;
     -i|--ingress)
         INGRESS_ENDPOINT=$2
-        break
+        shift 2
         ;;
     -d|--delete)
         DELETE_VOLS=true
-        break
+        shift
         ;;
     -n|--no-snapshots)
         CREATE_SNAPSHOTS=false
-        break
+        shift
         ;;
     -v|--debug)
         set -x
-        break
+        shift
         ;;
     -t|--tenants)
 		INCLUDE_TENANTS=true
-        break
+        shift
+        ;;
+    --) 
+        shift 
+        break 
         ;;
     *)
-		echo "Unrecognized option(s)... continuing with defaults"
-        break
+        echo "Unrecognized option: $1"
+        exit 1
         ;;
     esac
 done
