@@ -173,7 +173,7 @@ function createDLMPolicy {
         "RetainRule": {"Interval": 90, "IntervalUnit": "DAYS"},
         "ArchiveRule": {
             "RetainRule":{ 
-                "RetentionArchiveTier": {"Interval": 365, "IntervalUnit": "DAYS"}
+                "RetentionArchiveTier": {"Interval": 5, "IntervalUnit": "YEARS"}
             }
         }
     }]}'
@@ -414,15 +414,15 @@ EOF
 }
 
 # Entry Point
-GETOPT=`getopt -o cdhintv \
-    -l check,delete,help,ingress,no-snapshots,tenants,debug: -- "$@"`
+GETOPT=`getopt -o acdhintv \
+    -l all,check,delete,help,ingress,no-snapshots,tenants,debug: -- "$@"`
 
 # Exit if getopt fails
 if [ $? -ne 0 ]; then
     echo "Invalid option(s) provided."
     exit 1
 fi
-echo $GETOPT
+
 # Parse arguments
 eval set -- "$GETOPT"
 
