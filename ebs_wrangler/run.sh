@@ -203,12 +203,10 @@ function deleteEbsVolumes {
         if [[ -n ${PV} ]]; then
             PV_NAME=$(awk '{ print $1 }' <<< $PV)
             # PV_VOL_HANDLE=$(awk '{ print $2 }' <<< $PV) # future use
-            # kubectl patch pv ${PV_NAME} -p '{"spec":{"persistentVolumeReclaimPolicy":"Delete"}}'                              # TODO: Uncomment this line when development is complete
-            kubectl patch pv ${PV_NAME} -p '{"spec":{"persistentVolumeReclaimPolicy":"Delete"}}' --dry-run=client -o yaml       # TODO: Remove this line when development is complete
+            kubectl patch pv ${PV_NAME} -p '{"spec":{"persistentVolumeReclaimPolicy":"Delete"}}'
         else
             # Only use the  or AWS CLI if the K8S cluster is unaware of the volume
-            # aws ec2 delete-volume --volume-id $VOLUME 2>/dev/null                                                             # TODO: Uncomment this line when development is complete
-            aws ec2 delete-volume --volume-id $VOLUME --dry-run 2>/dev/null                                                     # TODO: Remove this line when development is complete
+            aws ec2 delete-volume --volume-id $VOLUME 2>/dev/null
         fi
     done
 }
@@ -396,8 +394,9 @@ EBS Wrangler features:
 ${TAB}o Checks all pre-requesites are satisfied to run $0
 ${TAB}o Gathers K8S Pods that contain AWS account info for management and/or tenants
 ${TAB}o Gathers and reports unattached EBS volume data and costs
+${TAB}o Creates EBS snapshots and Data Lifecycle Manager policy
+${TAB}o Tags all resources created by this script
 ${TAB}o Deletes unattached EBS volumes
-
 ${TAB}MANDATORY PARAMETERS
 ${TAB}None.
 
